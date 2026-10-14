@@ -117,7 +117,8 @@
 
 - T04（receiver 嵌入）：pom 坐标照需求用 `io.mishmash.opentelemetry:collector-embedded:1.2.1`；
   但**必须**先在内网跑通探针确认 API；失败钩子按 Plan B 兜底（同步+异步两路径，见 §1）。
-  包名已更正为 `com.nl.observe.*`（旧 `com.nlolobserve` 为拼写错误，评审 Nit 已修，T04 直接沿用）。
+  POC 包名已更正为 `com.nl.observe.*`；**生产模块（T04+）按详细设计用 `com.nlolobserve.*`**
+  （详细设计 §包结构为契约；`nlolobserve` 疑似 `nl-observe` 拼写错误，统一改名须先改设计文档）。
   T04 开工前置安全项（安全评审登记）：入口鉴权/限流/body 上限（T06 范围）、
   `nl.customer_id` 白名单格式校验（不得信任浏览器自报租户）、Kafka SASL/SSL 配置项、
   Testcontainers 镜像按 digest 固定。
