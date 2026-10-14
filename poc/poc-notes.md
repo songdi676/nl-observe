@@ -57,7 +57,7 @@
 | @opentelemetry/exporter-trace-otlp-http | 0.223.0 | OTLP/HTTP exporter（与 core 2.12.0 配套） |
 | vue | 3.5.44 / 2.7.16 | vue3 宿主 / vue2 宿主（2.x 末版） |
 | @vue/test-utils | 2.5.1 / 1.3.6 | 对应双宿主 |
-| vitest + @vitest/coverage-v8 | 3.2.7 | jsdom 26.1.0，TS 5.9.3 |
+| vitest + @vitest/coverage-v8 | 5.0.4 | jsdom 26.1.0，TS 5.9.3。3.2.7 因传递依赖 tinypool≤2.1.1 两枚 critical 公告（GHSA-5gmw-xhrv-c9v3 / GHSA-85c8-ppgw-ccpr）无法过 `npm audit --audit-level=high` 门，升级至 5.0.4（Node ≥22.12，本环境 v26 满足）后双宿主 8 用例全绿 |
 
 **OTel JS 2.x API 变化（T12/T13 实现必须按此写）：**
 1. `new Resource({...})` 构造器已移除 → `resourceFromAttributes({...})`。
@@ -109,3 +109,21 @@
   max-block 5s、buffer 64MB、send-timeout 9s），可直接复用。
 - T12（sdk-web 骨架）：OTel 依赖版本按 §2 表锁定；代码按 §2「2.x API 变化」四条编写；
   双宿主工程结构可直接沿用 poc/sdk-vue2-init、poc/sdk-vue3-init（vitest+jsdom+test-utils 组合已验证）。
+
+## 6. 质量门口径（仓库根聚合，2026-10-15 修复轮）
+
+- 首轮质量门 `{"overall":"fail"}` 根因：`scripts/quality-gate.sh --scope all` 在仓库根执行，
+  而根目录无 pom.xml/package.json（project_type=none，门脚本只识别当前目录）。
+- 修复：仓库根升级为 npm workspaces 聚合工程（根 package.json / tsconfig.json /
+  eslint.config.mjs / vitest.config.ts / .gitignore），workspaces 覆盖 poc/sdk-vue2-init
+  与 poc/sdk-vue3-init；门四项（eslint、vue-tsc、覆盖率、npm audit）均在根执行，
+  覆盖率产物为根 coverage/coverage-summary.json（双宿主聚合，lines 100%）。
+  门脚本落位 scripts/quality-gate.sh（复制自 nl-sdlc 插件），保证根目录命令可用。
+- 依赖锁定改由根 package-lock.json 单一事实来源（双宿主嵌套 lockfile 已删除，
+  npm workspaces 安装时忽略嵌套 lock）。
+- Java 侧（poc/receiver-otlp-kafka）不在根放 pom.xml，门本轮只跑前端侧：本环境
+  Maven Central 不可达（§3），checkstyle/spotbugs/jacoco/dependency-check 无法执行；
+  §4 未竟项继续有效，内网通路打通后在 poc 目录跑 `mvn test jacoco:report` 并评估
+  根聚合 pom 纳入后端门。
+- vue@2.7.16 存在 moderate ReDoS 公告（GHSA-5j4c-8p2g-v4jx，2.x 已 EOL 无修复版本），
+  低于 high 不阻断门；vue2 宿主仅 POC 验证用，正式 SDK 以 peerDependency 由宿主自带 vue。

@@ -16,6 +16,7 @@ import {
   BatchSpanProcessor,
   InMemorySpanExporter,
   SimpleSpanProcessor,
+  type SpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 // OTel JS 2.x：Resource 构造器已移除，改用 resourceFromAttributes（POC 发现，见 poc-notes.md）
@@ -38,7 +39,7 @@ export interface PocHandles {
 /** 初始化 WebTracerProvider（resource 带 nl.customer_id，与概要设计 §7 一致）。 */
 export function initPocTracing(opts: PocInitOptions): PocHandles {
   const memoryExporter = new InMemorySpanExporter();
-  const processors = [new SimpleSpanProcessor(memoryExporter)];
+  const processors: SpanProcessor[] = [new SimpleSpanProcessor(memoryExporter)];
 
   let otlpExporter: OTLPTraceExporter | undefined;
   if (opts.otlpUrl) {
