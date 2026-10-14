@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": [],
+    "lib": ["ES2020", "DOM"]
+  },
+  "include": [
+    "vitest.config.ts",
+    "poc/sdk-vue2-init/src",
+    "poc/sdk-vue2-init/test",
+    "poc/sdk-vue3-init/src",
+    "poc/sdk-vue3-init/test"
+  ]
+}

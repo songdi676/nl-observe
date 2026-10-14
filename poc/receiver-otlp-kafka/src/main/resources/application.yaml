@@ -1,0 +1,30 @@
+# T01 POC receiver：OTLP/HTTP 4318 → Kafka
+# producer 参数与需求 yaml 一一对应（NFR-01/NFR-02）；凭证走环境变量占位
+server:
+  port: ${OBSERVE_OTLP_PORT:4318}
+
+observe:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:10.1.8.33:9092}
+    traces-topic: nl-observe.otlp.traces
+    metrics-topic: nl-observe.otlp.metrics
+    logs-topic: nl-observe.otlp.logs
+    acks: all
+    idempotence: true
+    compression-type: lz4
+    linger-ms: 5
+    batch-size: 65536
+    # delivery.timeout.ms 必须 >= linger.ms + request.timeout.ms
+    delivery-timeout-ms: 20000
+    request-timeout-ms: 15000
+    retries: 2147483647
+    max-in-flight: 5
+    # Kafka 不可达时快速失败(毫秒)
+    max-block-ms: 5000
+    buffer-memory: 67108864
+    # 单条消息等待确认上限(毫秒), 需小于库的批次超时(10s)
+    send-timeout-ms: 9000
+
+logging:
+  level:
+    com.nlolobserve.poc: DEBUG
