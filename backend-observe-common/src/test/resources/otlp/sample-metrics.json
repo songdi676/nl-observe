@@ -1,0 +1,55 @@
+{
+  "resourceMetrics": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "nl-observe-web"}},
+          {"key": "nl.customer_id", "value": {"stringValue": "CUST-001"}}
+        ]
+      },
+      "scopeMetrics": [
+        {
+          "scope": {"name": "sdk-web", "version": "0.1.0"},
+          "metrics": [
+            {
+              "name": "nl.first_screen_load",
+              "unit": "ms",
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "attributes": [
+                      {"key": "nl.customer_id", "value": {"stringValue": "CUST-001"}}
+                    ],
+                    "startTimeUnixNano": "1759020000000000000",
+                    "timeUnixNano": "1759020001234000000",
+                    "asDouble": 1830.5
+                  }
+                ]
+              }
+            },
+            {
+              "name": "nl.business_duration",
+              "unit": "ms",
+              "sum": {
+                "dataPoints": [
+                  {
+                    "attributes": [
+                      {"key": "biz.code", "value": {"stringValue": "ORDER"}},
+                      {"key": "biz.status", "value": {"stringValue": "success"}},
+                      {"key": "biz.end_reason", "value": {"stringValue": "explicit"}}
+                    ],
+                    "startTimeUnixNano": "1759020000000000000",
+                    "timeUnixNano": "1759020045210000000",
+                    "asDouble": 45210.0
+                  }
+                ],
+                "aggregationTemporality": 2,
+                "isMonotonic": true
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
