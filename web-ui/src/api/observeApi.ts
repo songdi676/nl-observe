@@ -27,7 +27,7 @@ export interface ObserveApiOptions {
   baseURL?: string
   /** 401 跳转登录地址，默认取配置 VITE_LOGIN_URL（外部网关依赖） */
   loginUrl?: string
-  /** 请求超时（毫秒），默认 10000，与查询端 query-timeout 对齐 */
+  /** 请求超时（毫秒），默认 12000 = 查询端 query-timeout(10s) + 余量，保证能收到后端 50000 envelope */
   timeoutMs?: number
   /** 401 处理钩子，默认 window.location.assign(loginUrl) */
   onUnauthorized?: (loginUrl: string) => void
@@ -61,21 +61,41 @@ export function createObserveApi(options: ObserveApiOptions = {}): ObserveApi {
   const onUnauthorized = options.onUnauthorized ?? defaultOnUnauthorized
   const http: AxiosInstance = axios.create({
     baseURL: options.baseURL ?? cfg.apiBaseURL,
-    timeout: options.timeoutMs ?? 10000
+    timeout: options.timeoutMs ?? 12000
   })
+  /** 并发请求同时 401 时只跳转一次 */
+  let redirecting = false
 
-  /** 统一解包 {code,message,data}：code 非 0 抛 ApiError；HTTP 401 跳转登录 */
+  /**
+   * 统一解包 {code,message,data}（详细设计 §4.1：业务错误以非 2xx 状态返回）：
+   * - HTTP 401 → 跳转登录（一次性）并抛原错
+   * - 响应体含 ApiResult envelope 且 code 非 0（无论 2xx 还是 4xx/5xx）→ 抛 ApiError
+   * - 2xx 但 envelope 形状不符 → 抛 ApiError(-1)
+   */
   async function request<T>(config: AxiosRequestConfig): Promise<T> {
     try {
       const resp = await http.request<ApiResult<T>>(config)
       const body = resp.data
+      if (typeof body?.code !== 'number') {
+        throw new ApiError(-1, '响应格式不符合 {code,message,data}')
+      }
       if (body.code !== 0) {
         throw new ApiError(body.code, body.message)
       }
       return body.data
     } catch (e) {
-      if (axios.isAxiosError(e) && e.response?.status === 401) {
-        onUnauthorized(loginUrl)
+      if (axios.isAxiosError(e)) {
+        if (e.response?.status === 401) {
+          if (!redirecting) {
+            redirecting = true
+            onUnauthorized(loginUrl)
+          }
+          throw e
+        }
+        const body = e.response?.data as ApiResult<unknown> | undefined
+        if (body && typeof body.code === 'number' && body.code !== 0) {
+          throw new ApiError(body.code, body.message)
+        }
       }
       throw e
     }

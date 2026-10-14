@@ -133,11 +133,14 @@ describe('observeApi 统一解包 {code,message,data}', () => {
   })
 })
 
-describe('observeApi 非 0 code 抛业务错误', () => {
-  it('code=40001 抛 ApiError（参数错误）', async () => {
+describe('observeApi 非 0 code 抛业务错误（详细设计 §4.1：业务错误映射为非 2xx）', () => {
+  it('HTTP 400 + code=40001 抛 ApiError（参数错误）', async () => {
     server.use(
       http.get(`${BASE}/customers/:customerId/businesses`, () =>
-        HttpResponse.json({ code: 40001, message: 'from/to 必填', data: null })
+        HttpResponse.json(
+          { code: 40001, message: 'from/to 必填', data: null },
+          { status: 400 }
+        )
       )
     )
     const api = createObserveApi({ baseURL: BASE })
@@ -149,16 +152,75 @@ describe('observeApi 非 0 code 抛业务错误', () => {
     expect((err as ApiError).message).toBe('from/to 必填')
   })
 
-  it('code=40401 抛 ApiError（无数据）', async () => {
+  it('HTTP 404 + code=40401 抛 ApiError（无数据）', async () => {
     server.use(
       http.get(`${BASE}/customers/:customerId/traces/:traceId`, () =>
-        HttpResponse.json({ code: 40401, message: 'trace not found', data: null })
+        HttpResponse.json(
+          { code: 40401, message: 'trace not found', data: null },
+          { status: 404 }
+        )
       )
     )
     const api = createObserveApi({ baseURL: BASE })
     await expect(api.getTrace('c-001', 'missing')).rejects.toMatchObject({
       code: 40401
     })
+  })
+
+  it('HTTP 429 + code=42901 抛 ApiError（运维视图限流）', async () => {
+    server.use(
+      http.get(`${BASE}/metrics/summary`, () =>
+        HttpResponse.json(
+          { code: 42901, message: 'rate limited', data: null },
+          { status: 429 }
+        )
+      )
+    )
+    const api = createObserveApi({ baseURL: BASE })
+    await expect(
+      api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28' })
+    ).rejects.toMatchObject({ code: 42901 })
+  })
+
+  it('HTTP 500 + code=50000 抛 ApiError（服务端错误）', async () => {
+    server.use(
+      http.get(`${BASE}/metrics/summary`, () =>
+        HttpResponse.json(
+          { code: 50000, message: 'internal error', data: null },
+          { status: 500 }
+        )
+      )
+    )
+    const api = createObserveApi({ baseURL: BASE })
+    await expect(
+      api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28' })
+    ).rejects.toMatchObject({ code: 50000 })
+  })
+
+  it('健壮性兜底：HTTP 200 + 非 0 code 仍抛 ApiError', async () => {
+    server.use(
+      http.get(`${BASE}/customers/:customerId/businesses`, () =>
+        HttpResponse.json({ code: 40001, message: 'from/to 必填', data: null })
+      )
+    )
+    const api = createObserveApi({ baseURL: BASE })
+    await expect(
+      api.listBusinesses('c-001', { from: '', to: '' })
+    ).rejects.toMatchObject({ code: 40001 })
+  })
+
+  it('HTTP 200 但响应非 envelope 形状 → ApiError(-1)', async () => {
+    server.use(
+      http.get(`${BASE}/customers/:customerId/businesses`, () =>
+        HttpResponse.text('<html>gateway error</html>')
+      )
+    )
+    const api = createObserveApi({ baseURL: BASE })
+    const err = await api
+      .listBusinesses('c-001', { from: '2026-09-01', to: '2026-09-28' })
+      .catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).code).toBe(-1)
   })
 })
 
@@ -193,5 +255,42 @@ describe('observeApi 401 跳转登录', () => {
       api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28' })
     ).rejects.toThrow()
     expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  it('默认行为：401 触发 window.location.assign(loginUrl)', async () => {
+    server.use(
+      http.get(`${BASE}/customers/:customerId/businesses`, () =>
+        HttpResponse.json({ message: 'unauthorized' }, { status: 401 })
+      )
+    )
+    const assign = vi.fn()
+    vi.stubGlobal('location', { assign })
+    try {
+      const api = createObserveApi({ baseURL: BASE, loginUrl: 'https://gateway.test/login' })
+      await expect(
+        api.listBusinesses('c-001', { from: '2026-09-01', to: '2026-09-28' })
+      ).rejects.toThrow()
+      expect(assign).toHaveBeenCalledWith('https://gateway.test/login')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('并发多个 401 只跳转一次', async () => {
+    server.use(
+      http.get(`${BASE}/customers/:customerId/businesses`, () =>
+        HttpResponse.json({ message: 'unauthorized' }, { status: 401 })
+      ),
+      http.get(`${BASE}/metrics/summary`, () =>
+        HttpResponse.json({ message: 'unauthorized' }, { status: 401 })
+      )
+    )
+    const onUnauthorized = vi.fn()
+    const api = createObserveApi({ baseURL: BASE, loginUrl: '/login', onUnauthorized })
+    await Promise.allSettled([
+      api.listBusinesses('c-001', { from: '2026-09-01', to: '2026-09-28' }),
+      api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28' })
+    ])
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
   })
 })
