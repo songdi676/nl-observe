@@ -27,20 +27,29 @@
   （独立端口监听）；protobuf 4.36.1 较新，T04 需确认与 spring-kafka/kafka-clients 无类冲突。
 
 **进程内启动验证：本环境无法完成（被网络阻断），见 §4。**
-- 已产出可构建工程 `poc/receiver-otlp-kafka/`（pom 声明该依赖 + JDK17 + Spring Boot 3.3.5），
-  在有 Maven 仓库访问的环境执行 `mvn test` 即可完成验收 #1（OTLP/HTTP→Kafka topic 断言）。
+- 已产出工程 `poc/receiver-otlp-kafka/`（pom 声明该依赖为 optional + JDK17 + Spring Boot 3.3.5），
+  在有 Maven 仓库访问的环境执行 `mvn verify` 即可完成验收 #1（OTLP/HTTP→Kafka topic 断言）。
+  **本环境从未编译/运行过 Java 侧**（评审 Critical：验收 #1 未验证即交付的根因是网络阻断，
+  非代码缺陷；但旧代码确有编译错误 `SEND_TIMEOUT_MS_CONFIG`，已修，见 §4.4）。
+  Spring Boot parent 3.3.5 已过 OSS 补丁支持期（评审 A06），T04 开工先升 parent 到受支持线。
 - API 面探针：`CollectorEmbeddedProbeTest` 在 jar 可解析时自动 dump 全部 `io/mishmash/**`
   类的公开方法/构造器签名到 `target/collector-embedded-api.txt`，用于确认启动/停止与
   导出失败钩子（无需预先知道其 API）。
 
 **导出失败可观测钩子（验收 #2）结论：**
 - Plan A（collector-embedded）：钩子点待探针输出确认（jar 不可下载，本环境无法枚举其回调 API）。
-- Plan B（已实现，可测）：`KafkaTemplate.send(...).whenComplete((md, ex) -> if (ex != null) counter++)`
-  —— producer send 异常完成即计数 micrometer `nl.receiver.dropped`；OTLP 入口仍返回 200
-  （详设 §4.2 防浏览器重试风暴）。`ExportFailureHookIT` 以不可达 broker 注入故障断言
-  200 + 计数递增（max-block-ms=5000 快速失败语义）。
-- 结论：即使 collector-embedded 无丢弃回调，Plan B 的 producer 异常计数点已覆盖 AC-10 需求；
-  T04/T05 按详设 §1.2 既定策略执行（有回调用回调，无则 micrometer 包装）。
+  探针已修正为解析 `java.class.path` + 兜底扫 `~/.m2` 并用 `URLClassLoader` 反射 dump
+  （旧版 `cl.getResources("")` 在 Maven 布局下永远扫不到依赖 jar，评审 Major 已修）。
+- Plan B（已实现；**评审修正**）：`KafkaTemplate.send(...).whenComplete(...)` 只覆盖**入队成功后**
+  的异步失败；broker 不可达时 `send()` 在 max-block.ms(5000) 内取不到 metadata 会**同步抛出**
+  `TimeoutException`（kafka-clients javadoc），旧实现会让异常穿透为 HTTP 500 且计数不递增，
+  与 AC-10 语义矛盾。现已在 controller 内 try/catch：同步异常分支 `dropped.increment()` 后仍返回
+  200，异步失败仍由 whenComplete 计数。`ExportFailureHookIT` 断言 200 + 计数递增——但该 IT
+  属 failsafe（`*IT`），**重跑命令为 `mvn verify`**（旧 `mvn test` 不会执行它，评审 Major 已修）。
+- 结论：即使 collector-embedded 无丢弃回调，Plan B 的 producer 异常计数点（同步+异步两路径）
+  已覆盖 AC-10 需求；T04/T05 按详设 §1.2 既定策略执行（有回调用回调，无则 micrometer 包装）。
+  **注意：以上 Java 侧断言在本环境从未实际运行（Maven Central/Docker 镜像均不可达），
+  验收 #1 仍属未验证状态，须在打通仓库的环境按 §4 重跑回填后方可关闭。**
 
 ## 2. OTel 前端 SDK（风险 #7，验收 #3）
 
@@ -94,16 +103,24 @@
 
 ## 4. 本环境未竟项（需在打通仓库后重跑）
 
-1. `cd poc/receiver-otlp-kafka && mvn test jacoco:report` → 验收 #1（ReceiverOtlpKafkaIT）
-   与 #2（ExportFailureHookIT）断言通过 + JaCoCo 覆盖率产物。
+1. `cd poc/receiver-otlp-kafka && mvn verify` → surefire 跑探针、failsafe 跑验收 #1
+   （ReceiverOtlpKafkaIT）与 #2（ExportFailureHookIT），jacoco:report 绑定 verify 阶段
+   聚合两者覆盖率。（旧口径 `mvn test jacoco:report` 不会执行 `*IT`，已更正。）
 2. `CollectorEmbeddedProbeTest` 输出 `target/collector-embedded-api.txt` → 回填 §1 钩子结论
    （Plan A 是否有导出失败回调）。
 3. 若 Plan A 探针显示无失败钩子 → 按 Plan B（已实现）接线，T04 不再依赖 Plan A 钩子。
+4. 重跑前确认 `KafkaProducerConfig` 不再引用不存在的 `ProducerConfig.SEND_TIMEOUT_MS_CONFIG`
+   （评审 Blocker：kafka-clients 无此常量，旧代码必编译失败；已删除，send-timeout 仅保留为
+   需求侧参数供 /config/producer 回显）。
 
 ## 5. 对 T04/T12 的选型建议
 
 - T04（receiver 嵌入）：pom 坐标照需求用 `io.mishmash.opentelemetry:collector-embedded:1.2.1`；
-  但**必须**先在内网跑通探针确认 API；失败钩子按 Plan B 兜底（已可测）。
+  但**必须**先在内网跑通探针确认 API；失败钩子按 Plan B 兜底（同步+异步两路径，见 §1）。
+  包名已更正为 `com.nl.observe.*`（旧 `com.nlolobserve` 为拼写错误，评审 Nit 已修，T04 直接沿用）。
+  T04 开工前置安全项（安全评审登记）：入口鉴权/限流/body 上限（T06 范围）、
+  `nl.customer_id` 白名单格式校验（不得信任浏览器自报租户）、Kafka SASL/SSL 配置项、
+  Testcontainers 镜像按 digest 固定。
 - T05：producer 参数已在 `KafkaProducerConfig` 与需求 yaml 逐项一致（acks=all、idempotence、
   lz4、linger 5、batch 65536、delivery 20s、request 15s、retries MAX、max-in-flight 5、
   max-block 5s、buffer 64MB、send-timeout 9s），可直接复用。
@@ -127,3 +144,9 @@
   根聚合 pom 纳入后端门。
 - vue@2.7.16 存在 moderate ReDoS 公告（GHSA-5j4c-8p2g-v4jx，2.x 已 EOL 无修复版本），
   低于 high 不阻断门；vue2 宿主仅 POC 验证用，正式 SDK 以 peerDependency 由宿主自带 vue。
+- **门状态口径更正（评审 Minor）**：`npm audit` 项依赖 registry 可达性——评审环境复跑
+  `--scope frontend` 得 `overall:fail`（eslint/vue-tsc/coverage 均 pass，仅 npm-audit 因
+  endpoint 不可达而 fail）。门脚本把网络失败与漏洞失败混为一谈；解读门结果时须区分
+  「漏洞失败」与「网络不可达」。本仓库开发期以本地已安装树 + lockfile 为准。
+- 根 package-lock.json 曾由手工合并产生（84/349 条目缺 `resolved`+`integrity`，安全评审
+  A08 Medium），已删除并用 `npm install` 重新生成为 npm 原生产物。

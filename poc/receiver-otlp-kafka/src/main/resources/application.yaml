@@ -27,4 +27,5 @@ observe:
 
 logging:
   level:
-    com.nlolobserve.poc: DEBUG
+    # 默认 INFO：DEBUG 可能把遥测载荷细节写入日志（安全评审 A09）；调试时用 profile 覆盖
+    com.nl.observe.poc: INFO

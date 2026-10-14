@@ -1,4 +1,4 @@
-package com.nlolobserve.poc.receiver;
+package com.nl.observe.poc.receiver;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
@@ -39,7 +39,7 @@ class ExportFailureHookIT {
     void kafkaUnreachable_returns200_andDroppedCounterIncrements() {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        String payload = ReceiverOtlpKafkaIT.sampleTraceJson("C-99", "biz.business.FAIL");
+        String payload = SamplePayloads.sampleTraceJson("C-99", "biz.business.FAIL");
 
         long before = counterValue();
         ResponseEntity<String> resp = rest.postForEntity("/v1/traces",

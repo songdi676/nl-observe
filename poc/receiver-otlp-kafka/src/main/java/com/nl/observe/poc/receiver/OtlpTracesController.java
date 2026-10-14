@@ -1,7 +1,6 @@
-package com.nlolobserve.poc.receiver;
+package com.nl.observe.poc.receiver;
 
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.atomic.AtomicLong;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,8 +24,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class OtlpTracesController {
 
-    static final AtomicLong DROPPED = new AtomicLong(); // 测试断言辅助（与 Counter 同步）
-
     private final KafkaTemplate<String, String> kafka;
     private final KafkaExporterProperties props;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -40,20 +37,24 @@ public class OtlpTracesController {
         this.dropped = registry.counter("nl.receiver.dropped");
     }
 
-    @PostMapping(value = "/v1/traces",
-            consumes = {MediaType.APPLICATION_JSON_VALUE, "application/json"})
+    @PostMapping(value = "/v1/traces", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Void> traces(@RequestBody byte[] body) {
         String payload = new String(body, StandardCharsets.UTF_8);
         String key = extractCustomerId(payload);
-        kafka.send(props.getTracesTopic(), key, payload)
-                .whenComplete((md, ex) -> {
-                    if (ex != null) {
-                        dropped.increment();
-                        DROPPED.incrementAndGet();
-                    }
-                });
-        // 快速失败语义：send() 在 max-block-ms 内入队成功即返回 200；
-        // broker 不可达时 whenComplete 异常分支计数（AC-10）
+        // AC-10 快速失败语义：broker 不可达时 send() 会在 max-block-ms(5000) 内取不到
+        // metadata 而**同步抛出** TimeoutException——必须捕获计数并仍返回 200，
+        // 否则异常穿透为 500 且 whenComplete 从未注册、dropped 不递增。
+        // 入队成功后的异步失败由 whenComplete 异常分支计数。
+        try {
+            kafka.send(props.getTracesTopic(), key, payload)
+                    .whenComplete((md, ex) -> {
+                        if (ex != null) {
+                            dropped.increment();
+                        }
+                    });
+        } catch (Exception e) {
+            dropped.increment();
+        }
         return ResponseEntity.ok().build();
     }
 

@@ -1,9 +1,8 @@
-package com.nlolobserve.poc.receiver;
+package com.nl.observe.poc.receiver;
 
 import java.time.Duration;
 import java.util.Collections;
 import java.util.Map;
-import java.util.Properties;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -50,7 +49,7 @@ class ReceiverOtlpKafkaIT {
 
     @Test
     void otlpHttpTraces_areForwardedToKafkaTopic() throws Exception {
-        String payload = sampleTraceJson("C-42", "biz.business.ORDER");
+        String payload = SamplePayloads.sampleTraceJson("C-42", "biz.business.ORDER");
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
@@ -85,32 +84,4 @@ class ReceiverOtlpKafkaIT {
         }
     }
 
-    static String sampleTraceJson(String customerId, String spanName) {
-        return """
-        {
-          "resourceSpans": [{
-            "resource": { "attributes": [
-              {"key":"service.name","value":{"stringValue":"poc-vue"}},
-              {"key":"nl.customer_id","value":{"stringValue":"%s"}}
-            ]},
-            "scopeSpans": [{ "scope": {"name":"nl-observe-poc"}, "spans": [{
-              "traceId":"4bf92f3577b34da6a3ce929d0e0e4736",
-              "spanId":"00f067aa0e942000",
-              "name":"%s",
-              "kind":1,
-              "startTimeUnixNano":"1759000000000000000",
-              "endTimeUnixNano":"1759000045000000000",
-              "attributes":[
-                {"key":"biz.code","value":{"stringValue":"ORDER"}},
-                {"key":"biz.status","value":{"stringValue":"success"}}
-              ],
-              "status": {"code":1}
-            }]}]
-          }]
-        }
-        """.formatted(customerId, spanName);
-    }
-
-    @SuppressWarnings("unused")
-    private static Properties unused() { return new Properties(); }
 }

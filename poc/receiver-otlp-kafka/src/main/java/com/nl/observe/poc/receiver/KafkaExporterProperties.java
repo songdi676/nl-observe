@@ -1,4 +1,4 @@
-package com.nlolobserve.poc.receiver;
+package com.nl.observe.poc.receiver;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

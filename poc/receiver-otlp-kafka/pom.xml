@@ -19,7 +19,7 @@
     <relativePath/>
   </parent>
 
-  <groupId>com.nlolobserve.poc</groupId>
+  <groupId>com.nl.observe.poc</groupId>
   <artifactId>receiver-otlp-kafka</artifactId>
   <version>0.0.1-SNAPSHOT</version>
   <name>poc-receiver-otlp-kafka</name>
@@ -43,11 +43,14 @@
       <artifactId>spring-boot-starter-validation</artifactId>
     </dependency>
 
-    <!-- Plan A：需求指定的内嵌 collector（坐标存在性已在 poc-notes.md 记录） -->
+    <!-- Plan A：需求指定的内嵌 collector（坐标存在性已在 poc-notes.md 记录）。
+         optional：仅反射探针（test）使用，避免内网私服同步不到该坐标时
+         连 Plan B 兜底实现都无法解析构建（POC 的兜底价值正在于此）。 -->
     <dependency>
       <groupId>io.mishmash.opentelemetry</groupId>
       <artifactId>collector-embedded</artifactId>
       <version>${collector-embedded.version}</version>
+      <optional>true</optional>
     </dependency>
 
     <!-- Plan B：OTLP/HTTP → Kafka 直写 -->
@@ -85,6 +88,21 @@
 
   <build>
     <plugins>
+      <!-- *IT 验收测试由 failsafe 在 verify 阶段执行（surefire 默认不跑 *IT）；
+           重跑命令为 mvn verify（见 poc-notes.md §4） -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>integration-tests</id>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
@@ -96,7 +114,7 @@
           </execution>
           <execution>
             <id>report</id>
-            <phase>test</phase>
+            <phase>verify</phase>
             <goals><goal>report</goal></goals>
           </execution>
         </executions>

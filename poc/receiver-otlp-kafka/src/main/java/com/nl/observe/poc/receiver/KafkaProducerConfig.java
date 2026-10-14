@@ -1,4 +1,4 @@
-package com.nlolobserve.poc.receiver;
+package com.nl.observe.poc.receiver;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -35,7 +35,8 @@ public class KafkaProducerConfig {
         m.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, p.getMaxInFlight());
         m.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, p.getMaxBlockMs());
         m.put(ProducerConfig.BUFFER_MEMORY_CONFIG, p.getBufferMemory());
-        m.put(ProducerConfig.SEND_TIMEOUT_MS_CONFIG, p.getSendTimeoutMs());
+        // 注：kafka-clients 无 send.timeout.ms producer 配置（超时语义由 delivery/request/max.block 覆盖）；
+        // sendTimeoutMs 仅作为需求侧参数保留在 KafkaExporterProperties，供 /config/producer 回显对照
         return m;
     }
 
