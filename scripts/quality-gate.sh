@@ -55,6 +55,13 @@ resolve() { # resolve mvn -> 路径或空
   else command -v "$1" 2>/dev/null || true; fi
 }
 
+# 项目本地工具链引导：非登录 shell（自动化代理/CI 容器）可能缺 mvn/java 的 PATH。
+# 仅当 PATH 无 mvn 且存在 scripts/quality-gate.env.sh 时 source 之——只补工具位置，
+# 不改变任何门的阈值与判定口径；环境本身有 mvn 时该文件不会被触发。
+if [ -z "$(command -v mvn 2>/dev/null)" ] && [ -f "$(dirname "$0")/quality-gate.env.sh" ]; then
+  . "$(dirname "$0")/quality-gate.env.sh"
+fi
+
 # 捕获门函数输出；函数内部 emit（如 mvn 未安装）在 $() 子 shell 中退出，此处按原退出码转发
 capture() { # capture <func>  -> 设置 REPORT 并按需 exit
   REPORT=$("$@"); local rc=$?
