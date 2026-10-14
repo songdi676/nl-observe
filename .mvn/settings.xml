@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 项目本地 Maven 配置：内网/可达镜像（与 ~/.m2 缓存的 huaweicloud 仓库 ID 一致）。
+     通过 .mvn/maven.config 的 -s 生效，要求从仓库根目录运行 mvn（质量门即如此）。 -->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <mirrors>
+    <mirror>
+      <id>huaweicloud</id>
+      <name>Huawei Cloud Maven Mirror</name>
+      <url>https://mirrors.huaweicloud.com/repository/maven/</url>
+      <mirrorOf>central</mirrorOf>
+    </mirror>
+  </mirrors>
+</settings>

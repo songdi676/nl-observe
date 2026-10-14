@@ -31,6 +31,7 @@
     <checkstyle.version>8.45</checkstyle.version>
     <spotbugs-plugin.version>4.7.3.6</spotbugs-plugin.version>
     <jacoco-plugin.version>0.8.12</jacoco-plugin.version>
+    <dependency-check-plugin.version>12.1.0</dependency-check-plugin.version>
   </properties>
 
   <dependencyManagement>
@@ -116,7 +117,29 @@
             </execution>
           </executions>
         </plugin>
+        <!-- 安全门：mvn dependency-check:check（质量门脚本与 CI 同命令）。
+             failBuildOnCVSS=7 → 高危（CVSS≥7.0）即构建失败，对应门阈值"无高危漏洞"。 -->
+        <plugin>
+          <groupId>org.owasp</groupId>
+          <artifactId>dependency-check-maven</artifactId>
+          <version>${dependency-check-plugin.version}</version>
+          <configuration>
+            <failBuildOnCVSS>7</failBuildOnCVSS>
+            <formats>
+              <format>HTML</format>
+              <format>JSON</format>
+            </formats>
+          </configuration>
+        </plugin>
       </plugins>
     </pluginManagement>
+    <plugins>
+      <!-- 声明于根 build/plugins：使 mvn dependency-check:check 的 goal 前缀解析
+           无需下载 group 级 maven-metadata（离线/镜像抖动时仍可解析到本仓库已固定版本） -->
+      <plugin>
+        <groupId>org.owasp</groupId>
+        <artifactId>dependency-check-maven</artifactId>
+      </plugin>
+    </plugins>
   </build>
 </project>
