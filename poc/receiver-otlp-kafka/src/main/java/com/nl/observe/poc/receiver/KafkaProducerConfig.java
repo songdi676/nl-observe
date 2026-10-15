@@ -18,8 +18,13 @@ import org.springframework.kafka.core.ProducerFactory;
 @Configuration
 public class KafkaProducerConfig {
 
-    @Bean
-    public Map<String, Object> kafkaProducerProps(KafkaExporterProperties p) {
+    /**
+     * 刻意不声明 @Bean：`Map<String, Object>` 注入点会被 Spring 按「收集容器内全部 bean 成 Map」
+     * 解析（value 类型为 Object → 含 otlpTracesController），引发
+     * producerFactory → otlpTracesController → kafkaTemplate → producerFactory 循环依赖，
+     * 导致 ApplicationContext 无法启动（2026-10-15 私服通路打通后首跑 ExportFailureHookIT 暴露）。
+     */
+    static Map<String, Object> kafkaProducerProps(KafkaExporterProperties p) {
         Map<String, Object> m = new HashMap<>();
         m.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, p.getBootstrapServers());
         m.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
@@ -41,8 +46,8 @@ public class KafkaProducerConfig {
     }
 
     @Bean
-    public ProducerFactory<String, String> producerFactory(Map<String, Object> kafkaProducerProps) {
-        return new DefaultKafkaProducerFactory<>(kafkaProducerProps);
+    public ProducerFactory<String, String> producerFactory(KafkaExporterProperties p) {
+        return new DefaultKafkaProducerFactory<>(kafkaProducerProps(p));
     }
 
     @Bean

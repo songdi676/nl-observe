@@ -79,10 +79,11 @@
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- compile scope：主代码（KafkaProducerConfig/OtlpTracesController）直接使用
+         ProducerConfig 等类；若声明为 test 会覆盖 spring-kafka 的传递 compile 作用域导致编译失败 -->
     <dependency>
       <groupId>org.apache.kafka</groupId>
       <artifactId>kafka-clients</artifactId>
-      <scope>test</scope>
     </dependency>
   </dependencies>
 

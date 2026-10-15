@@ -41,7 +41,7 @@ class ExportFailureHookIT {
         headers.setContentType(MediaType.APPLICATION_JSON);
         String payload = SamplePayloads.sampleTraceJson("C-99", "biz.business.FAIL");
 
-        long before = counterValue();
+        double before = counterValue();
         ResponseEntity<String> resp = rest.postForEntity("/v1/traces",
                 new HttpEntity<>(payload, headers), String.class);
         assertThat(resp.getStatusCode().value()).isEqualTo(200);
