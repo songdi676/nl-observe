@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  T04：覆盖率聚合模块（无代码，packaging=pom）。
+  质量门读取仓库根 target/site/jacoco/jacoco.csv；多后端模块下若各模块直接写根目录
+  会互相覆盖（见 T02 在 common pom 中的预警注释），故由本模块的 report-aggregate
+  绑定 test 阶段统一产出聚合 csv。根目录 `mvn test` / `mvn test jacoco:report`
+  后本模块最后构建，聚合报告覆盖写入根目录。
+  新增后端模块时：在根 pom <modules> 中置于本模块之前，并在本模块 <dependencies>
+  中追加该模块。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.nlolobserve</groupId>
+    <artifactId>nl-observe</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>backend-observe-coverage</artifactId>
+  <packaging>pom</packaging>
+  <name>backend-observe-coverage</name>
+  <description>jacoco 跨模块聚合报告（质量门口径产物落位仓库根）</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.nlolobserve</groupId>
+      <artifactId>backend-observe-common</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.nlolobserve</groupId>
+      <artifactId>backend-observe-receiver</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- 本模块无代码、依赖均为内部模块（已在各自模块扫描）：
+           质量门 CLI 直跑（mvn spotbugs:check / dependency-check:check）时
+           裸 goal 不构建 reactor 依赖，会因快照 jar 未安装而解析失败，故显式跳过 -->
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+        <configuration>
+          <skip>true</skip>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.owasp</groupId>
+        <artifactId>dependency-check-maven</artifactId>
+        <configuration>
+          <skip>true</skip>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <configuration>
+          <outputDirectory>${maven.multiModuleProjectDirectory}/target/site/jacoco</outputDirectory>
+        </configuration>
+        <executions>
+          <execution>
+            <id>report-aggregate</id>
+            <phase>test</phase>
+            <goals>
+              <goal>report-aggregate</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
