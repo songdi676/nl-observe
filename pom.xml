@@ -32,6 +32,12 @@
     <spotbugs-plugin.version>4.7.3.6</spotbugs-plugin.version>
     <jacoco-plugin.version>0.8.12</jacoco-plugin.version>
     <dependency-check-plugin.version>12.1.0</dependency-check-plugin.version>
+    <!-- 显式导入 testcontainers-bom：Spring Boot 3.3.5 BOM 的 1.19.8 未收录 databend 模块
+         （1.20.0 起才有），统一升到内网镜像可用的 1.21.4（覆盖 SB BOM 对 testcontainers 的版本管理） -->
+    <testcontainers.version>1.21.4</testcontainers.version>
+    <!-- Databend JDBC 驱动：仅测试用（Testcontainers Databend 集成测试 T03/T08）。
+         版本以内网镜像（.mvn/settings.xml）实际可用为准 -->
+    <databend-jdbc.version>0.4.8</databend-jdbc.version>
   </properties>
 
   <dependencyManagement>
@@ -40,6 +46,13 @@
         <groupId>com.nlolobserve</groupId>
         <artifactId>backend-observe-common</artifactId>
         <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers-bom</artifactId>
+        <version>${testcontainers.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
       </dependency>
     </dependencies>
   </dependencyManagement>
