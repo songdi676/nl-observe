@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * 可接收 /v1/traces 与 /v1/metrics（样例 OTLP/JSON → 200）；未启用 gRPC 4317。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-class OtlpHttpEndpointTest {
+public class OtlpHttpEndpointTest {
 
     /** 随机空闲端口：验证端口可配（详设 §1.2 集成测试口径） */
     private static final int OTLP_PORT = freePort();
@@ -89,7 +89,8 @@ class OtlpHttpEndpointTest {
         }
     }
 
-    static int freePort() {
+    /** 供其他包（web）的测试用例复用：随机空闲端口。 */
+    public static int freePort() {
         try (ServerSocket ss = new ServerSocket(0)) {
             return ss.getLocalPort();
         } catch (IOException e) {

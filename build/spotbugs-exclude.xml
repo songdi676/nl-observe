@@ -13,14 +13,17 @@
     <Bug code="EI, EI2"/>
   </Match>
   <!--
-    T04：Spring DI 构造注入有意持有单例 bean 引用
-    （Vertx/Instrumentation/OtlpProperties 为共享单例，复制即错），EI_EXPOSE_REP2 误报。
+    T04/T05：Spring DI 构造注入有意持有单例 bean 引用
+    （Vertx/Instrumentation/OtlpProperties/KafkaExporterProperties 为共享单例，复制即错），
+    EI_EXPOSE_REP2 误报。
   -->
   <Match>
     <Or>
       <Class name="com.nlolobserve.receiver.collector.ContextSafeTracesCollector"/>
       <Class name="com.nlolobserve.receiver.collector.ContextSafeMetricsCollector"/>
+      <Class name="com.nlolobserve.receiver.collector.ContextSafeLogsCollector"/>
       <Class name="com.nlolobserve.receiver.collector.EmbeddedCollectorConfig"/>
+      <Class name="com.nlolobserve.receiver.web.ProducerConfigController"/>
     </Or>
     <Method name="&lt;init&gt;"/>
     <Bug code="EI2"/>

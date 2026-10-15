@@ -1,8 +1,29 @@
-# T04 receiver 骨架配置（详设 §5）；Kafka/安全配置项随 T05/T06 接入
+# T04/T05 receiver 配置（详设 §5）；Kafka 凭证走环境变量（NFR-04，代码不落口令）
 observe:
   otlp:
     # OTLP/HTTP 接收端口（Vert.x，独立于 servlet 端口）；集成测试用随机端口覆盖
     port: ${OBSERVE_OTLP_PORT:4318}
+  kafka:
+    # producer 参数逐项对应需求 yaml（详设 §5；T05 验收 #2 经 /config/producer 断言）
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:10.1.8.33:9092}
+    traces-topic: nl-observe.otlp.traces
+    metrics-topic: nl-observe.otlp.metrics
+    logs-topic: nl-observe.otlp.logs
+    acks: all
+    idempotence: true
+    compression-type: lz4
+    linger-ms: 5
+    batch-size: 65536
+    # delivery.timeout.ms 必须 >= linger.ms + request.timeout.ms
+    delivery-timeout-ms: 20000
+    request-timeout-ms: 15000
+    retries: 2147483647
+    max-in-flight: 5
+    # Kafka 不可达时快速失败(毫秒)（AC-10：5s 内失败 → 丢弃计数，入口仍 200）
+    max-block-ms: 5000
+    buffer-memory: 67108864
+    # 单条消息等待确认上限(毫秒)，需求侧参数（kafka-clients 无同名 producer 配置，见 KafkaExporterProperties 注释）
+    send-timeout-ms: 9000
 
 logging:
   level:

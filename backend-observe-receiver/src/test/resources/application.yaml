@@ -1,0 +1,31 @@
+# 测试专用配置：覆盖主 application.yaml（classpath 测试资源优先，整体替换而非合并）。
+# 关键：Kafka bootstrap 指向死端口 127.0.0.1:19092——任何 @SpringBootTest 上下文
+# 都不得连上真实 broker（需求 yaml 的 10.1.8.33:9092 是内网生产地址，测试写入即污染）。
+# 需要特定 bootstrap 的用例经 @DynamicPropertySource 覆盖：
+#   ProducerConfigControllerTest → 需求 yaml 值（只读回显，无发送，安全）
+#   KafkaUnreachableDroppedTest  → 死端口（AC-10 故障注入）
+#   KafkaThreeTopicsRoutingTest  → Testcontainers 容器地址
+observe:
+  otlp:
+    port: 4318
+  kafka:
+    bootstrap-servers: 127.0.0.1:19092
+    traces-topic: nl-observe.otlp.traces
+    metrics-topic: nl-observe.otlp.metrics
+    logs-topic: nl-observe.otlp.logs
+    acks: all
+    idempotence: true
+    compression-type: lz4
+    linger-ms: 5
+    batch-size: 65536
+    delivery-timeout-ms: 20000
+    request-timeout-ms: 15000
+    retries: 2147483647
+    max-in-flight: 5
+    max-block-ms: 5000
+    buffer-memory: 67108864
+    send-timeout-ms: 9000
+
+logging:
+  level:
+    com.nlolobserve.receiver: INFO
