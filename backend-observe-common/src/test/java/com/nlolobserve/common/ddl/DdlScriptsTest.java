@@ -21,7 +21,7 @@ class DdlScriptsTest {
     @Test
     void spansDdlHasEnginePartitionOrderTtlAndKeyColumns() {
         String ddl = DdlScripts.OTEL_SPANS;
-        assertTrue(ddl.contains("CREATE TABLE otel_spans"));
+        assertTrue(ddl.contains("CREATE TABLE IF NOT EXISTS otel_spans"));
         assertTrue(ddl.contains("ENGINE = ReplacingMergeTree"));
         assertTrue(ddl.contains("PARTITION BY toYYYYMMDD(start_time)"));
         assertTrue(ddl.contains("ORDER BY (customer_id, trace_id, span_id, start_time, end_time)"));
@@ -32,12 +32,20 @@ class DdlScriptsTest {
             assertTrue(ddl.contains(column), "spans DDL 缺列: " + column);
         }
         assertTrue(ddl.contains("DateTime64(9)"));
+        // ORDER BY（ReplacingMergeTree merge key）列必须 NOT NULL（T03 评审 Critical 修复钉住）
+        for (String notNull : new String[] {"customer_id        String        NOT NULL",
+                "trace_id           String        NOT NULL",
+                "span_id            String        NOT NULL",
+                "start_time         DateTime64(9) NOT NULL",
+                "end_time           DateTime64(9) NOT NULL"}) {
+            assertTrue(ddl.contains(notNull), "spans merge key 列缺 NOT NULL: " + notNull);
+        }
     }
 
     @Test
     void metricsDdlHasEnginePartitionOrderTtlAndKeyColumns() {
         String ddl = DdlScripts.OTEL_METRICS;
-        assertTrue(ddl.contains("CREATE TABLE otel_metrics"));
+        assertTrue(ddl.contains("CREATE TABLE IF NOT EXISTS otel_metrics"));
         assertTrue(ddl.contains("ENGINE = ReplacingMergeTree"));
         assertTrue(ddl.contains("PARTITION BY toYYYYMMDD(time)"));
         assertTrue(ddl.contains("ORDER BY (customer_id, metric_name, time, dp_hash)"));
@@ -46,12 +54,19 @@ class DdlScriptsTest {
                 "biz_code", "resource_json", "attributes_json", "dp_hash"}) {
             assertTrue(ddl.contains(column), "metrics DDL 缺列: " + column);
         }
+        // merge key 列 NOT NULL（同上）
+        for (String notNull : new String[] {"customer_id  String        NOT NULL",
+                "metric_name  String        NOT NULL",
+                "time         DateTime64(9) NOT NULL",
+                "dp_hash      String        NOT NULL"}) {
+            assertTrue(ddl.contains(notNull), "metrics merge key 列缺 NOT NULL: " + notNull);
+        }
     }
 
     @Test
     void logsDdlHasEnginePartitionOrderTtlAndKeyColumns() {
         String ddl = DdlScripts.OTEL_LOGS;
-        assertTrue(ddl.contains("CREATE TABLE otel_logs"));
+        assertTrue(ddl.contains("CREATE TABLE IF NOT EXISTS otel_logs"));
         assertTrue(ddl.contains("ENGINE = ReplacingMergeTree"));
         assertTrue(ddl.contains("PARTITION BY toYYYYMMDD(time)"));
         assertTrue(ddl.contains("ORDER BY (customer_id, trace_id, time, row_hash)"));
@@ -60,14 +75,21 @@ class DdlScriptsTest {
                 "severity_text", "body", "resource_json", "attributes_json", "row_hash"}) {
             assertTrue(ddl.contains(column), "logs DDL 缺列: " + column);
         }
+        // merge key 列 NOT NULL（同上）
+        for (String notNull : new String[] {"customer_id     String        NOT NULL",
+                "trace_id        String NOT NULL DEFAULT ''",
+                "time            DateTime64(9) NOT NULL",
+                "row_hash        String        NOT NULL"}) {
+            assertTrue(ddl.contains(notNull), "logs merge key 列缺 NOT NULL: " + notNull);
+        }
     }
 
     @Test
     void initScriptContainsAllThreeTablesInOrder() {
         String script = DdlScripts.initScript();
-        int spans = script.indexOf("CREATE TABLE otel_spans");
-        int metrics = script.indexOf("CREATE TABLE otel_metrics");
-        int logs = script.indexOf("CREATE TABLE otel_logs");
+        int spans = script.indexOf("CREATE TABLE IF NOT EXISTS otel_spans");
+        int metrics = script.indexOf("CREATE TABLE IF NOT EXISTS otel_metrics");
+        int logs = script.indexOf("CREATE TABLE IF NOT EXISTS otel_logs");
         assertTrue(spans >= 0 && metrics > spans && logs > metrics);
     }
 
