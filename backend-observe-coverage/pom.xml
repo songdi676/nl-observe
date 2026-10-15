@@ -34,6 +34,11 @@
       <artifactId>backend-observe-receiver</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <dependency>
+      <groupId>com.nlolobserve</groupId>
+      <artifactId>backend-observe-storage</artifactId>
+      <version>${project.version}</version>
+    </dependency>
   </dependencies>
 
   <build>

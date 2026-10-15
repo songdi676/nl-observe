@@ -1,0 +1,33 @@
+# T07 storage 骨架配置（详设 §5）：Kafka 消费端；Databend JDBC 数据源接入为 T08
+spring:
+  application:
+    name: backend-observe-storage
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:10.1.8.33:9092}
+    consumer:
+      # 消费组单一事实来源：observe.kafka.consumer-group（KafkaConsumerProperties）
+      group-id: ${observe.kafka.consumer-group}
+      auto-offset-reset: earliest
+      # 写库成功后才提交 offset（at-least-once）：禁用自动提交，手动 ack 后同步提交
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # 单批上限对齐 T08 JDBC batch（500/批，详设 §1.3）
+      max-poll-records: 500
+    listener:
+      # 批处理（验收 batch.listener=true）+ 手动提交（写成功才 ack）
+      type: batch
+      ack-mode: manual_immediate
+
+observe:
+  databend:
+    url: ${DATABEND_URL:}
+    username: ${DATABEND_USER:}
+    password: ${DATABEND_PASSWORD:}
+  kafka:
+    consumer-group: nl-observe-storage
+
+logging:
+  level:
+    # 默认 INFO：DEBUG 可能把遥测载荷细节写入日志（安全评审 A09，同 receiver 口径）
+    com.nlolobserve.storage: INFO

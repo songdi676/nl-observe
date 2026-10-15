@@ -23,6 +23,7 @@
   <modules>
     <module>backend-observe-common</module>
     <module>backend-observe-receiver</module>
+    <module>backend-observe-storage</module>
     <!-- 覆盖率聚合模块：必须保持在最后，report-aggregate 依赖前面模块的 exec 产物 -->
     <module>backend-observe-coverage</module>
   </modules>

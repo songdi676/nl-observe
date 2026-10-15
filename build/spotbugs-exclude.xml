@@ -25,4 +25,17 @@
     <Method name="&lt;init&gt;"/>
     <Bug code="EI2"/>
   </Match>
+  <!--
+    T07：storage 三 consumer 构造注入仓库/BatchWriteSupport 单例 bean
+    （Spring DI 有意共享引用，复制即错），EI_EXPOSE_REP2 误报。
+  -->
+  <Match>
+    <Or>
+      <Class name="com.nlolobserve.storage.consumer.TracesConsumer"/>
+      <Class name="com.nlolobserve.storage.consumer.MetricsConsumer"/>
+      <Class name="com.nlolobserve.storage.consumer.LogsConsumer"/>
+    </Or>
+    <Method name="&lt;init&gt;"/>
+    <Bug code="EI2"/>
+  </Match>
 </FindBugsFilter>
