@@ -54,15 +54,16 @@ describe('NlObserveClient 骨架语义', () => {
     expect(c.isInitialized).toBe(false);
   });
 
-  it('已 init 的门面方法 no-op 不抛；signIn 更新 customerId（T13 前骨架语义）', () => {
+  it('已 init 的门面方法全链路不抛；signIn 更新 customerId（状态机语义详见 business.spec）', () => {
     const c = new NlObserveClient();
     c.init({ customerId: 'C-0' });
     c.signIn('C-1');
     expect(c.resolvedOptions.customerId).toBe('C-1');
-    c.startBusiness('ORDER');
+    const bizId = c.startBusiness('ORDER');
+    expect(bizId).toBeDefined();
     c.suspendBusiness('ORDER');
     c.resumeBusiness('ORDER');
-    c.endBusiness('ORDER', 'explicit');
+    c.endBusiness('ORDER', { status: 'success', endReason: 'explicit' });
     c.trackRest('GET', '/api/x', 200, 10);
     c.signOut();
   });

@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-// 仓库根聚合 POC 宿主 + sdk-web 双测试宿主 + sdk-web core 单测：
+// 仓库根聚合 POC 宿主 + sdk-web 双测试宿主 + sdk-web core 单测（core.spec + business.spec）：
 // 一次运行产出根目录 coverage/coverage-summary.json（质量门读取点）
 // 注：sdk-web 的构建产物测试（test/dist-loads.spec.ts）不在根聚合——它依赖 dist 存在，
 // 经 npm test -w @nl-observe/sdk-web（pretest 先 tsup 构建）单独跑。
@@ -51,7 +51,7 @@ export default defineConfig({
           name: 'sdk-web-core',
           root: './sdk-web',
           environment: 'node',
-          include: ['test/core.spec.ts'],
+          include: ['test/core.spec.ts', 'test/business.spec.ts'],
         },
       },
     ],

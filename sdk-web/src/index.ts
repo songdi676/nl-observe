@@ -6,3 +6,7 @@ export { SDK_VERSION } from './core/version';
 export { DEFAULT_BATCH_TIMEOUT_MS, NlObserveClient, createClient } from './core/client';
 export type { NlObserveOptions, ResolvedOptions } from './core/client';
 export type { NlObserveGuardEntry } from './core/guard';
+export { SigninManager } from './core/SigninManager';
+export type { SigninState } from './core/SigninManager';
+export { BusinessManager } from './core/BusinessManager';
+export type { BizEndReason, BizStatus, BusinessState } from './core/BusinessManager';

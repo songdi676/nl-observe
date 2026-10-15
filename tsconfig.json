@@ -19,6 +19,7 @@
     "sdk-web/src",
     "sdk-web/test/dist-loads.spec.ts",
     "sdk-web/test/core.spec.ts",
+    "sdk-web/test/business.spec.ts",
     "sdk-web/test/vue2-host",
     "sdk-web/test/vue3-host"
   ]
