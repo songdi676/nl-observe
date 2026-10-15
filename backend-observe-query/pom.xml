@@ -41,8 +41,7 @@
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
-    <!-- 详设 §6.2：query 集成测试依赖 Testcontainers Databend（env-gated，镜像不可得按 assumption 跳过）；
-         Databend JDBC 驱动仅测试用（与 T03 口径一致，主代码经 spring.datasource 由运行环境提供驱动） -->
+    <!-- 详设 §6.2：query 集成测试依赖 Testcontainers Databend（env-gated，镜像不可得按 assumption 跳过） -->
     <dependency>
       <groupId>org.testcontainers</groupId>
       <artifactId>databend</artifactId>
@@ -53,11 +52,14 @@
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- Databend JDBC 驱动 runtime scope（T09 评审 M1/安全 F7）：query 是首个运行时依赖该驱动的模块，
+         test scope 下 fat-jar 缺驱动 → java -jar 启动 "No suitable driver"、自检误导性 fail-fast；
+         runtime scope 使驱动进可交付物且纳入 Dependency-Check 扫描 -->
     <dependency>
       <groupId>com.databend</groupId>
       <artifactId>databend-jdbc</artifactId>
       <version>${databend-jdbc.version}</version>
-      <scope>test</scope>
+      <scope>runtime</scope>
     </dependency>
   </dependencies>
 

@@ -33,9 +33,10 @@ class MetricSummaryServiceTest {
         when(repository.findFirstScreenLoadP95(any(), any(), eq("c-1"))).thenReturn(1830.5);
         BizMetric metric = new BizMetric();
         metric.setBizCode("ORDER");
-        when(repository.findPerBizMetrics(any(), any(), any(), eq("c-1"))).thenReturn(List.of(metric));
+        when(repository.findPerBizMetrics(any(), any(), eq("c-1"), any())).thenReturn(List.of(metric));
 
-        MetricSummary summary = service(0).summary("2026-09-01", "2026-09-28", null, "c-1");
+        // 评审 m5：限额 0 启动即 fail-fast，这里用有效限额（带 customerId 本就不走限流）
+        MetricSummary summary = service(60).summary("2026-09-01", "2026-09-28", null, "c-1");
         assertThat(summary.getFirstScreenLoadP95()).isEqualTo(1830.5);
         assertThat(summary.getPerBiz()).containsExactly(metric);
     }

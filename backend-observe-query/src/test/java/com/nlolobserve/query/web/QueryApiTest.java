@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -61,6 +62,15 @@ class QueryApiTest {
     @Test
     void businesses_missingFrom_returns40001() throws Exception {
         mockMvc.perform(get("/api/observe/customers/c-1/businesses").param("to", "2026-09-28"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(40001));
+    }
+
+    @Test
+    void wrongHttpMethod_mapsTo40001_not500() throws Exception {
+        // 评审 Major：框架异常（HttpRequestMethodNotSupportedException 等）曾被
+        // Exception.class 兜底 handler 吞成 500——显式映射回 4xx 契约
+        mockMvc.perform(post("/api/observe/customers/c-1/businesses"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(40001));
     }
@@ -131,7 +141,7 @@ class QueryApiTest {
         BizMetric metric = new BizMetric();
         metric.setBizCode("ORDER");
         metric.setCount(552);
-        when(repository.findPerBizMetrics(any(), any(), any(), eq("c-1"))).thenReturn(List.of(metric));
+        when(repository.findPerBizMetrics(any(), any(), eq("c-1"), any())).thenReturn(List.of(metric));
 
         mockMvc.perform(get("/api/observe/metrics/summary")
                         .param("from", "2026-09-01").param("to", "2026-09-28").param("customerId", "c-1"))

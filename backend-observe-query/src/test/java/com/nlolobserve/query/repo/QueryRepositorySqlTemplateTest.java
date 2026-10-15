@@ -24,6 +24,28 @@ class QueryRepositorySqlTemplateTest {
     }
 
     @Test
+    void jsonExtraction_usesDatabendDialect_notClickHouse() {
+        // 评审 Critical：json_extract_string 是 ClickHouse 函数，Databend 无此函数
+        // （IT 实跑 QueryError 1008）——模板必须用 json_extract_path_text
+        assertThat(QueryRepository.SQL_BUSINESS_ITEMS)
+                .contains(QueryRepository.JSON_EXTRACT_FUNC + "(");
+        assertThat(QueryRepository.SQL_PER_BIZ_SUMMARY)
+                .contains(QueryRepository.JSON_EXTRACT_FUNC + "(");
+        for (String sql : new String[] {QueryRepository.SQL_BUSINESS_ITEMS, QueryRepository.SQL_PER_BIZ_SUMMARY,
+                QueryRepository.SQL_SPANS_BY_TRACE, QueryRepository.SQL_SPAN_DETAIL,
+                QueryRepository.SQL_FIRST_SCREEN_LOAD_P95}) {
+            assertThat(sql).doesNotContain("json_extract_string");
+        }
+    }
+
+    @Test
+    void spansByTraceTemplate_hasBoundedLimit() {
+        // 安全评审 F6：超大 trace 结果集有界
+        assertThat(QueryRepository.SQL_SPANS_BY_TRACE)
+                .contains("LIMIT " + QueryRepository.SPANS_BY_TRACE_LIMIT);
+    }
+
+    @Test
     void spansByTraceTemplate_usesNamedParamsAndFinal() {
         assertThat(QueryRepository.SQL_SPANS_BY_TRACE)
                 .contains(":customerId")

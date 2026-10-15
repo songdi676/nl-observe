@@ -7,15 +7,22 @@
 <configuration>
   <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
   <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+  <!-- 评审 m1：控制台 pattern 追加 %X{traceId}，让 GlobalExceptionHandler 等业务日志
+       与 AuditLogFilter 写入的 MDC traceId 同请求可关联（覆盖 Boot 默认 pattern） -->
+  <property name="CONSOLE_LOG_PATTERN"
+            value="%clr(%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX}){faint} %clr(%-5level){level} %clr(%logger{36}){cyan} %X{traceId:-} %msg%n"/>
 
   <springProperty scope="context" name="AUDIT_FILE" source="logging.audit.file"
                   defaultValue="logs/audit/audit.log"/>
 
   <appender name="AUDIT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
     <file>${AUDIT_FILE}</file>
-    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-      <fileNamePattern>${AUDIT_FILE}.%d{yyyy-MM-dd}.log</fileNamePattern>
+    <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+      <fileNamePattern>${AUDIT_FILE}.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
       <maxHistory>90</maxHistory>
+      <maxFileSize>100MB</maxFileSize>
+      <!-- 评审 F8：90 天窗口内总量上限，防高流量占满磁盘 -->
+      <totalSizeCap>5GB</totalSizeCap>
     </rollingPolicy>
     <encoder>
       <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %msg%n</pattern>

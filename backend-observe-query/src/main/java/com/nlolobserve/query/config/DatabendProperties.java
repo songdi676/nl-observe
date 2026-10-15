@@ -22,16 +22,31 @@ public class DatabendProperties {
 
     /**
      * 启动自检：url 必须已配置且含 presigned_url_disabled=true，否则 fail-fast。
+     * 参数精确匹配（评审 m3：子串 contains 过宽，...=trueX 等值拼接也能通过）：
+     * 按 & 切分 query 段，整段等于 presigned_url_disabled=true 才算命中。
      */
     public void validate() {
         if (url == null || url.isBlank()) {
             throw new IllegalStateException(
                     "observe.databend.url 未配置（只读账号环境变量 DATABEND_URL_RO）");
         }
-        if (!url.contains(REQUIRED_URL_PARAM)) {
+        if (!hasRequiredParam(url)) {
             throw new IllegalStateException(
                     "observe.databend.url 必须包含 " + REQUIRED_URL_PARAM + "（同存储端 presigned_url_disabled 自检）");
         }
+    }
+
+    static boolean hasRequiredParam(String url) {
+        int q = url.indexOf('?');
+        if (q < 0 || q == url.length() - 1) {
+            return false;
+        }
+        for (String segment : url.substring(q + 1).split("&")) {
+            if (REQUIRED_URL_PARAM.equals(segment)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public String getUrl() {

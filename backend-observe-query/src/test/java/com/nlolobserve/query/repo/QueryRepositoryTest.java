@@ -153,12 +153,28 @@ class QueryRepositoryTest {
                 .thenAnswer(inv -> List.of(((RowMapper<BizMetric>) inv.getArgument(2)).mapRow(rs, 0)));
 
         List<BizMetric> perBiz = repo.findPerBizMetrics(
-                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 28), "ORDER", "c-1");
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 28), "c-1", "ORDER");
         assertThat(perBiz).hasSize(1);
         assertThat(perBiz.get(0).getBizCode()).isEqualTo("ORDER");
         assertThat(perBiz.get(0).getEffectiveDurationP95()).isEqualTo(52100.0);
         assertThat(perBiz.get(0).getCount()).isEqualTo(552L);
         assertThat(perBiz.get(0).getSuccessRate()).isCloseTo(542.0 / 552.0, org.assertj.core.data.Offset.offset(1e-9));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void findPerBizMetrics_bindsCustomerIdBeforeBizCode() {
+        // 评审 m5：签名参数序统一为 (from, to, customerId, bizCode)——绑定值防错位回归
+        when(jdbc.query(eq(QueryRepository.SQL_PER_BIZ_SUMMARY), any(SqlParameterSource.class), any(RowMapper.class)))
+                .thenReturn(List.of());
+        repo.findPerBizMetrics(LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 28), "c-1", "ORDER");
+
+        ArgumentCaptor<SqlParameterSource> params = ArgumentCaptor.forClass(SqlParameterSource.class);
+        verify(jdbc).query(eq(QueryRepository.SQL_PER_BIZ_SUMMARY), params.capture(), any(RowMapper.class));
+        MapSqlParameterSource src = (MapSqlParameterSource) params.getValue();
+        assertThat(src.getValue("customerId")).isEqualTo("c-1");
+        assertThat(src.getValue("bizCode")).isEqualTo("ORDER");
+        assertThat(src.getValue("bizNamePrefix")).isEqualTo("biz.business.%");
     }
 
     private ResultSet mockSpanRow() throws SQLException {

@@ -59,13 +59,15 @@ class AuditLogFilterTest {
                 .contains("method=GET")
                 .contains("path=/api/observe/customers/c-1/businesses")
                 .contains("customerId=c-1")
-                .contains("traceId=trace-fixed-1");
+                .contains("traceId=trace-fixed-1")
+                .contains("traceSrc=header");
     }
 
     @Test
     void metricsSummary_customerIdFromQueryParam() throws Exception {
         when(repository.findFirstScreenLoadP95(any(), any(), eq("c-9"))).thenReturn(100.0);
-        when(repository.findPerBizMetrics(any(), any(), any(), eq("c-9"))).thenReturn(List.of());
+        // 参数序 (from, to, customerId, bizCode)（评审 m5 统一签名）
+        when(repository.findPerBizMetrics(any(), any(), eq("c-9"), any())).thenReturn(List.of());
 
         mockMvc.perform(get("/api/observe/metrics/summary")
                         .param("from", "2026-09-01")
@@ -85,7 +87,47 @@ class AuditLogFilterTest {
                         .param("to", "2026-09-28"))
                 .andExpect(status().isOk());
 
-        assertThat(readAudit()).containsPattern("traceId=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+        String audit = readAudit();
+        assertThat(audit).containsPattern("traceId=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+        assertThat(audit).contains("traceSrc=gen");
+    }
+
+    @Test
+    void invalidTraceIdHeader_fallsBackToGeneratedUuid() throws Exception {
+        when(repository.findBusinessItems(eq("c-3"), any(), any(), any())).thenReturn(List.of(new BusinessItem()));
+
+        // 不合法头值（含空白/换行）：忽略内容、traceSrc=gen，头值不得原样入审计行（安全 F2）
+        mockMvc.perform(get("/api/observe/customers/c-3/businesses")
+                        .param("from", "2026-09-01")
+                        .param("to", "2026-09-28")
+                        .header(AuditLogFilter.TRACE_ID_HEADER, "evil trace\nid"))
+                .andExpect(status().isOk());
+
+        String audit = readAudit();
+        assertThat(audit).contains("traceSrc=gen");
+        assertThat(audit).containsPattern("traceId=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+        assertThat(audit).doesNotContain("evil trace");
+    }
+
+    @Test
+    void customerIdWithNewline_sanitizedInAuditLine_noForgedLine() throws Exception {
+        when(repository.findFirstScreenLoadP95(any(), any(), any())).thenReturn(100.0);
+        when(repository.findPerBizMetrics(any(), any(), any(), any())).thenReturn(List.of());
+
+        // %0A 解码后的换行若原样落盘可伪造整行审计记录（Major-1）：控制字符替换为 _
+        mockMvc.perform(get("/api/observe/metrics/summary")
+                        .param("from", "2026-09-01")
+                        .param("to", "2026-09-28")
+                        .param(AuditLogFilter.CUSTOMER_ID_PARAM, "c-9\nFORGED_LINE method=GET path=/api/observe/customers/attacker/businesses"))
+                .andExpect(status().isOk());
+
+        String audit = readAudit();
+        assertThat(audit).contains("customerId=c-9_FORGED_LINE");
+        assertThat(audit).doesNotContain("\nFORGED_LINE method=GET");
+        // 审计文件不得出现以伪造字段开头的独立行（伪造行无时间戳前缀）
+        for (String line : audit.split("\n")) {
+            assertThat(line).isNotEqualTo("FORGED_LINE method=GET");
+        }
     }
 
     @Test

@@ -35,6 +35,23 @@ class DatabendPropertiesTest {
     }
 
     @Test
+    void validate_rejectsConcatenatedParamValue_notSubstringMatch() {
+        // 评审 m3：参数值拼接（=trueX）不得被子串 contains 放过
+        DatabendProperties props = new DatabendProperties();
+        props.setUrl("jdbc:databend://10.1.8.33:8000/observe?x=1&presigned_url_disabled=trueX");
+        assertThatThrownBy(props::validate)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(DatabendProperties.REQUIRED_URL_PARAM);
+    }
+
+    @Test
+    void validate_acceptsParamAmongMultipleQueryParams() {
+        DatabendProperties props = new DatabendProperties();
+        props.setUrl("jdbc:databend://10.1.8.33:8000/observe?x=1&presigned_url_disabled=true&y=2");
+        assertThatCode(props::validate).doesNotThrowAnyException();
+    }
+
+    @Test
     void defaults_checkOnStartupTrue() {
         DatabendProperties props = new DatabendProperties();
         org.assertj.core.api.Assertions.assertThat(props.isCheckOnStartup()).isTrue();

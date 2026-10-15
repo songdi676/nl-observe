@@ -53,10 +53,18 @@ public class QueryRepository {
      * 业务列表（详设 §2.1）：业务 root span（name LIKE 'biz.business.%'），
      * status/endReason 取自 attributes_json 的 biz.status / biz.end_reason。
      */
+    /** Databend 方言：JSON 取值用 json_extract_path_text（json_extract_string 是 ClickHouse
+     *  函数，Databend 无此函数——T09 评审 Critical，IT 实跑复现 QueryError 1008） */
+    public static final String JSON_EXTRACT_FUNC = "json_extract_path_text";
+
     public static final String SQL_BUSINESS_ITEMS =
-            "SELECT span_id, biz_code, trace_id, start_time, effective_duration_ms,"
-                    + " json_extract_string(attributes_json, '$.\"biz.status\"') AS biz_status,"
-                    + " json_extract_string(attributes_json, '$.\"biz.end_reason\"') AS biz_end_reason"
+            "SELECT " + Columns.SPANS_SPAN_ID + ", " + Columns.SPANS_BIZ_CODE + ", "
+                    + Columns.SPANS_TRACE_ID + ", " + Columns.SPANS_START_TIME + ", "
+                    + Columns.SPANS_EFFECTIVE_DURATION_MS + ","
+                    + " " + JSON_EXTRACT_FUNC + "(" + Columns.SPANS_ATTRIBUTES_JSON
+                    + ", '$.\"biz.status\"') AS biz_status,"
+                    + " " + JSON_EXTRACT_FUNC + "(" + Columns.SPANS_ATTRIBUTES_JSON
+                    + ", '$.\"biz.end_reason\"') AS biz_end_reason"
                     + " FROM " + TableNames.OTEL_SPANS + " FINAL"
                     + " WHERE " + Columns.SPANS_CUSTOMER_ID + " = :customerId"
                     + " AND " + Columns.SPANS_NAME + " LIKE :bizNamePrefix"
@@ -65,6 +73,9 @@ public class QueryRepository {
                     + " AND ('' = :bizCode OR " + Columns.SPANS_BIZ_CODE + " = :bizCode)"
                     + " ORDER BY " + Columns.SPANS_START_TIME + " DESC"
                     + " LIMIT " + BUSINESS_LIST_LIMIT;
+
+    /** trace 全 span 行数上限（安全评审 F6：超大 trace 无界结果集读入内存的 DoS 面） */
+    public static final int SPANS_BY_TRACE_LIMIT = 10000;
 
     /** trace 全 span（详设 §2.2），按 start_time 正序 */
     public static final String SQL_SPANS_BY_TRACE =
@@ -76,7 +87,8 @@ public class QueryRepository {
                     + " FROM " + TableNames.OTEL_SPANS + " FINAL"
                     + " WHERE " + Columns.SPANS_CUSTOMER_ID + " = :customerId"
                     + " AND " + Columns.SPANS_TRACE_ID + " = :traceId"
-                    + " ORDER BY " + Columns.SPANS_START_TIME;
+                    + " ORDER BY " + Columns.SPANS_START_TIME
+                    + " LIMIT " + SPANS_BY_TRACE_LIMIT;
 
     /** 单 span 全字段（详设 §2.3；resource_json/scope_json/attributes_json 解析为对象） */
     public static final String SQL_SPAN_DETAIL =
@@ -110,7 +122,7 @@ public class QueryRepository {
             "SELECT " + Columns.SPANS_BIZ_CODE + ","
                     + " count(*) AS span_count,"
                     + " quantile(0.95)(" + Columns.SPANS_EFFECTIVE_DURATION_MS + ") AS effective_duration_p95,"
-                    + " sum(if(json_extract_string(" + Columns.SPANS_ATTRIBUTES_JSON
+                    + " sum(if(" + JSON_EXTRACT_FUNC + "(" + Columns.SPANS_ATTRIBUTES_JSON
                     + ", '$.\"biz.status\"') = 'success', 1, 0)) AS success_count"
                     + " FROM " + TableNames.OTEL_SPANS + " FINAL"
                     + " WHERE " + Columns.SPANS_NAME + " LIKE :bizNamePrefix"
@@ -163,9 +175,13 @@ public class QueryRepository {
         return rows.isEmpty() ? null : rows.get(0);
     }
 
-    /** 分业务汇总（详设 §2.4 perBiz）。customerId/bizCode 空串/ null 表示不过滤。 */
-    public List<BizMetric> findPerBizMetrics(LocalDate from, LocalDate to, String bizCode, String customerId) {
-        SqlParameterSource params = spanRangeParams(null, from, to)
+    /** 分业务汇总（详设 §2.4 perBiz）。customerId/bizCode 空串/ null 表示不过滤。
+     *  参数序与其余方法一致（customerId 在前，评审 m5）。 */
+    public List<BizMetric> findPerBizMetrics(LocalDate from, LocalDate to, String customerId, String bizCode) {
+        SqlParameterSource params = new MapSqlParameterSource()
+                .addValue("bizNamePrefix", AttributeKeys.BIZ_BUSINESS_NAME_PREFIX + "%")
+                .addValue("fromInclusive", boundaryTimestamp(from, false))
+                .addValue("toExclusive", boundaryTimestamp(to, true))
                 .addValue(PARAM_CUSTOMER_ID, nullToEmpty(customerId))
                 .addValue("bizCode", nullToEmpty(bizCode));
         return namedJdbc.query(SQL_PER_BIZ_SUMMARY, params, this::mapPerBizMetric);

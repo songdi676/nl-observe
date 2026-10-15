@@ -31,7 +31,7 @@ public class MetricSummaryService {
             throw new ApiException(ErrorCode.RATE_LIMITED);
         }
         Double firstScreenLoadP95 = repository.findFirstScreenLoadP95(range.from(), range.to(), customerId);
-        List<BizMetric> perBiz = repository.findPerBizMetrics(range.from(), range.to(), bizCode, customerId);
+        List<BizMetric> perBiz = repository.findPerBizMetrics(range.from(), range.to(), customerId, bizCode);
         if (firstScreenLoadP95 == null && perBiz.isEmpty()) {
             throw new ApiException(ErrorCode.NOT_FOUND);
         }

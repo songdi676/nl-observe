@@ -19,6 +19,12 @@ public class OpsViewRateLimiter {
     private int count;
 
     public OpsViewRateLimiter(QueryProperties properties) {
+        // 评审 m5：限额 <1 会把运维视图静默完全封禁，启动 fail-fast
+        if (properties.getOpsViewRateLimitPerMin() < 1) {
+            throw new IllegalStateException(
+                    "observe.ops-view-rate-limit-per-min 必须 >= 1（当前 "
+                            + properties.getOpsViewRateLimitPerMin() + "）");
+        }
         this.properties = properties;
     }
 
