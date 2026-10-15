@@ -10,6 +10,8 @@ import io.mishmash.opentelemetry.server.collector.TracesCollector;
 import io.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
 import io.vertx.core.Vertx;
 import io.vertx.ext.web.RoutingContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * collector-embedded 1.2.1 HTTP 通路缺陷适配（T04 实测）。
@@ -21,6 +23,8 @@ import io.vertx.ext.web.RoutingContext;
  * 上游若修复（>1.2.1）可删除本类。
  */
 public class ContextSafeTracesCollector extends TracesCollector {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ContextSafeTracesCollector.class);
 
     private final Instrumentation instrumentation;
     private final Executor vertxWorker;
@@ -45,15 +49,18 @@ public class ContextSafeTracesCollector extends TracesCollector {
                     try {
                         setOtelResponse(ctx, getBatchResponse(request, batch, "http", httpEncoding(ctx)));
                     } catch (Exception e) {
+                        LOG.error("Collector failed to build http response for /v1/traces", e);
                         setErrorCode(ctx, HTTP_SERVICE_UNAVAILABLE);
                         instrumentation.addErrorEvent(getOtelContext(ctx),
                                 new RuntimeException("Collector failed to build http response", e));
                     }
                 } else if (err instanceof TimeoutException) {
+                    LOG.error("Collector failed to publish trace records within allowed time", err);
                     setErrorCode(ctx, HTTP_SERVICE_UNAVAILABLE);
                     instrumentation.addErrorEvent(getOtelContext(ctx),
                             new RuntimeException("Collector failed to publish records within allowed time", err));
                 } else {
+                    LOG.error("Collector failed to publish trace records", err);
                     setErrorCode(ctx, HTTP_INTERNAL_ERROR);
                     instrumentation.addErrorEvent(getOtelContext(ctx),
                             new RuntimeException("Collector failed to publish records", err));

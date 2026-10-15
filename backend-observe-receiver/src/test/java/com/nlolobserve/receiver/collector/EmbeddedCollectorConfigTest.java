@@ -20,14 +20,18 @@ class EmbeddedCollectorConfigTest {
         try (ServerSocket blocker = new ServerSocket(0)) {
             OtlpProperties properties = new OtlpProperties();
             properties.setPort(blocker.getLocalPort());
-            EmbeddedCollectorConfig config = new EmbeddedCollectorConfig(properties);
+            EmbeddedCollectorConfig config =
+                    new EmbeddedCollectorConfig(properties,
+                            new PlaceholderSpansSubscriber(), new PlaceholderMetricsSubscriber());
 
             assertThatThrownBy(config::start)
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("OTLP/HTTP listen");
         }
         // 回滚后再次 stop 应安全无操作（资源已释放）
-        EmbeddedCollectorConfig config = new EmbeddedCollectorConfig(new OtlpProperties());
+        EmbeddedCollectorConfig config =
+                new EmbeddedCollectorConfig(new OtlpProperties(),
+                        new PlaceholderSpansSubscriber(), new PlaceholderMetricsSubscriber());
         assertThatCode(config::stop).doesNotThrowAnyException();
     }
 }

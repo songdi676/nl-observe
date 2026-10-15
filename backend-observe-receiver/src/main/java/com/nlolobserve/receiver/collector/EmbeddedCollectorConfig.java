@@ -8,6 +8,8 @@ import com.nlolobserve.receiver.config.OtlpProperties;
 
 import io.mishmash.opentelemetry.server.collector.Instrumentation;
 import io.mishmash.opentelemetry.server.collector.MetricsCollector;
+import io.mishmash.opentelemetry.server.collector.MetricsSubscriber;
+import io.mishmash.opentelemetry.server.collector.SpansSubscriber;
 import io.mishmash.opentelemetry.server.collector.TracesCollector;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
@@ -37,6 +39,8 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
     private static final long OPERATION_TIMEOUT_SEC = 10;
 
     private final OtlpProperties otlpProperties;
+    private final SpansSubscriber spansSubscriber;
+    private final MetricsSubscriber metricsSubscriber;
 
     private Vertx vertx;
     private HttpServer httpServer;
@@ -44,8 +48,17 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
     private MetricsCollector metricsCollector;
     private volatile boolean running;
 
-    public EmbeddedCollectorConfig(OtlpProperties otlpProperties) {
+    /**
+     * subscriber 经构造注入（T04 默认占位实现为 @Component；T05 替换为 Kafka 写入订阅者）。
+     * 测试：@MockitoBean 替换订阅者验证端到端投递（OtlpSubscriberDeliveryTest）；
+     * ContextSafe* 覆写的失败分支由测试子类直接注入故障覆盖（ContextSafeCollectorBranchTest）。
+     */
+    public EmbeddedCollectorConfig(OtlpProperties otlpProperties,
+                                   SpansSubscriber spansSubscriber,
+                                   MetricsSubscriber metricsSubscriber) {
         this.otlpProperties = otlpProperties;
+        this.spansSubscriber = spansSubscriber;
+        this.metricsSubscriber = metricsSubscriber;
     }
 
     @Override
@@ -57,8 +70,8 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
         // ContextSafe* 子类适配 1.2.1 的 HTTP 通路缺陷（见类注释），绑定路由与库行为一致
         tracesCollector = new ContextSafeTracesCollector(vertx, instrumentation);
         metricsCollector = new ContextSafeMetricsCollector(vertx, instrumentation);
-        tracesCollector.subscribe(new PlaceholderSpansSubscriber());
-        metricsCollector.subscribe(new PlaceholderMetricsSubscriber());
+        tracesCollector.subscribe(spansSubscriber);
+        metricsCollector.subscribe(metricsSubscriber);
         tracesCollector.bind(router);
         metricsCollector.bind(router);
         httpServer = vertx.createHttpServer().requestHandler(router);

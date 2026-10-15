@@ -10,11 +10,15 @@ import io.mishmash.opentelemetry.server.collector.MetricsCollector;
 import io.opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest;
 import io.vertx.core.Vertx;
 import io.vertx.ext.web.RoutingContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * collector-embedded 1.2.1 HTTP 通路缺陷适配——metrics 信号（说明同 {@link ContextSafeTracesCollector}）。
  */
 public class ContextSafeMetricsCollector extends MetricsCollector {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ContextSafeMetricsCollector.class);
 
     private final Instrumentation instrumentation;
     private final Executor vertxWorker;
@@ -39,15 +43,18 @@ public class ContextSafeMetricsCollector extends MetricsCollector {
                     try {
                         setOtelResponse(ctx, getBatchResponse(request, batch, "http", httpEncoding(ctx)));
                     } catch (Exception e) {
+                        LOG.error("Collector failed to build http response for /v1/metrics", e);
                         setErrorCode(ctx, HTTP_SERVICE_UNAVAILABLE);
                         instrumentation.addErrorEvent(getOtelContext(ctx),
                                 new RuntimeException("Collector failed to build http response", e));
                     }
                 } else if (err instanceof TimeoutException) {
+                    LOG.error("Collector failed to publish metric records within allowed time", err);
                     setErrorCode(ctx, HTTP_SERVICE_UNAVAILABLE);
                     instrumentation.addErrorEvent(getOtelContext(ctx),
                             new RuntimeException("Collector failed to publish records within allowed time", err));
                 } else {
+                    LOG.error("Collector failed to publish metric records", err);
                     setErrorCode(ctx, HTTP_INTERNAL_ERROR);
                     instrumentation.addErrorEvent(getOtelContext(ctx),
                             new RuntimeException("Collector failed to publish records", err));
