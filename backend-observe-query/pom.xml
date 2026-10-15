@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  T09：query Spring Boot 骨架 + Databend 只读连接 + 审计日志。
+  详设 §1.4：config（只读账号 DatabendProperties + presigned_url_disabled 自检）、
+  web（三 Controller + AuditLogFilter）、service、repo（NamedParameterJdbcTemplate，禁止拼接）。
+  只读账号分离：连接串走 DATABEND_URL_RO/DATABEND_USER_RO/DATABEND_PASSWORD_RO（详设 §5），
+  与存储端写账号（T08）互不共用；账号只读权限由 DBA 侧 GRANT READ 保证（运维项）。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.nlolobserve</groupId>
+    <artifactId>nl-observe</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>backend-observe-query</artifactId>
+  <name>backend-observe-query</name>
+  <description>查询端：businesses/traces/metrics-summary API（只读 Databend）+ 审计日志（T09 骨架）</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.nlolobserve</groupId>
+      <artifactId>backend-observe-common</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <!-- JdbcTemplate/NamedParameterJdbcTemplate + HikariCP（详设 §1.4 repo 层） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- 详设 §6.2：query 集成测试依赖 Testcontainers Databend（env-gated，镜像不可得按 assumption 跳过） -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>databend</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- Databend JDBC 驱动 runtime scope（T09 评审 M1/安全 F7）：query 是首个运行时依赖该驱动的模块，
+         test scope 下 fat-jar 缺驱动 → java -jar 启动 "No suitable driver"、自检误导性 fail-fast；
+         runtime scope 使驱动进可交付物且纳入 Dependency-Check 扫描 -->
+    <dependency>
+      <groupId>com.databend</groupId>
+      <artifactId>databend-jdbc</artifactId>
+      <version>${databend-jdbc.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

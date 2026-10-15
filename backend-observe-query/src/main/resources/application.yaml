@@ -1,0 +1,28 @@
+# T09 query 骨架配置（详设 §5）：只读账号凭证一律环境变量占位，代码与配置不落口令。
+# 只读账号（*_RO）与存储端写账号（T08）分离；账号只读权限由 DBA 侧 GRANT READ 保证。
+server:
+  port: ${OBSERVE_QUERY_PORT:8081}
+
+observe:
+  databend:
+    url: ${DATABEND_URL_RO:}
+    username: ${DATABEND_USER_RO:}
+    password: ${DATABEND_PASSWORD_RO:}
+    # 启动 SELECT 1 连接自检开关（详设 §1.4 同存储端 §1.3）；集成测试置 false 免依赖真实 Databend，
+    # presigned_url_disabled 自检不受此开关豁免
+    check-on-startup: true
+  query-timeout-ms: 10000
+  ops-view-rate-limit-per-min: 60
+
+spring:
+  jdbc:
+    template:
+      # 查询超时（详设 §4.2：查询超时 10s → 50000）
+      query-timeout: ${observe.query-timeout-ms}ms
+
+logging:
+  audit:
+    # 独立审计日志文件（AuditLogFilter → logback AUDIT appender）
+    file: ${OBSERVE_AUDIT_FILE:logs/audit/audit.log}
+  level:
+    com.nlolobserve.query: INFO

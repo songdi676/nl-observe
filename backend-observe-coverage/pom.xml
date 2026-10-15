@@ -39,6 +39,12 @@
       <artifactId>backend-observe-storage</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <!-- T09：查询端模块纳入聚合 -->
+    <dependency>
+      <groupId>com.nlolobserve</groupId>
+      <artifactId>backend-observe-query</artifactId>
+      <version>${project.version}</version>
+    </dependency>
   </dependencies>
 
   <build>
