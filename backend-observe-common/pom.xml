@@ -24,6 +24,24 @@
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- T03：Testcontainers Databend 集成测试（执行 001-init.sql）。
+         镜像不可得/Docker 不可用时用例按 assumption 跳过（详细设计 §测试策略 env-gated） -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>databend</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.databend</groupId>
+      <artifactId>databend-jdbc</artifactId>
+      <version>${databend-jdbc.version}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

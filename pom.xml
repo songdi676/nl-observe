@@ -45,6 +45,12 @@
     <netty.version>4.2.18.Final</netty.version>
     <!-- T04：与 collector-embedded 1.2.1 parent 锁定的 opentelemetry-api 对齐（覆盖 SB 3.5 管理的旧版本） -->
     <opentelemetry.version>1.65.0</opentelemetry.version>
+    <!-- T03：显式导入 testcontainers-bom：Spring Boot 3.3.5 BOM 的 1.19.8 未收录 databend 模块
+         （1.20.0 起才有），统一升到内网镜像可用的 1.21.4（覆盖 SB BOM 对 testcontainers 的版本管理） -->
+    <testcontainers.version>1.21.4</testcontainers.version>
+    <!-- T03：Databend JDBC 驱动：仅测试用（Testcontainers Databend 集成测试 T03/T08）。
+         版本以内网镜像（.mvn/settings.xml）实际可用为准 -->
+    <databend-jdbc.version>0.4.8</databend-jdbc.version>
   </properties>
 
   <dependencyManagement>
@@ -58,6 +64,13 @@
         <groupId>io.mishmash.opentelemetry</groupId>
         <artifactId>collector-embedded</artifactId>
         <version>${collector-embedded.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers-bom</artifactId>
+        <version>${testcontainers.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
       </dependency>
     </dependencies>
   </dependencyManagement>
