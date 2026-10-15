@@ -25,13 +25,18 @@ import io.opentelemetry.proto.trace.v1.Status;
  * 本类将其重建为合法 OTLP/JSON 单记录信封（Export*ServiceRequest 形态），供存储端（T08）按
  * common 模型解析。编码遵循 OTLP/HTTP JSON 规范：camelCase 键、枚举数值、int64/uint64 字符串、
  * trace/span id 十六进制（与 common 模型及样例 JSON 口径一致）。
+ * id 保真（T05 修复轮，评审 Minor-2 深挖结论）：collector-embedded 1.2.1 解析 OTLP/HTTP JSON
+ * 用 protobuf JsonFormat（AbstractCollector#parseJson），bytes 字段按 **base64** 解码；而
+ * OTLP/HTTP JSON 规范与全部 OTel SDK 以 hex 发送 traceId/spanId——库层 base64/hex 错位导致
+ * 扁平化记录里的 id 字节串 = 「把 SDK 的 hex 串当 base64 解码」的结果。该变换可逆无损
+ * （hex 字符集 ⊂ base64 字母表，32/16 长度均为 4 的倍数、无填充歧义），故本类对 id 字段
+ * 做 base64 编码即精确还原 SDK 原始 hex 串（见 recoveredId），存储端得到与 SDK 一致的 id。
  * 说明：exemplars 与 resource.entityRefs 不输出（浏览器 SDK 不产生；common 模型亦不消费）。
  */
 public final class OtlpJsonWriter {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private static final char[] HEX = "0123456789abcdef".toCharArray();
 
     private OtlpJsonWriter() {
     }
@@ -143,10 +148,10 @@ public final class OtlpJsonWriter {
 
     private static ObjectNode spanNode(io.opentelemetry.proto.trace.v1.Span span) {
         ObjectNode node = MAPPER.createObjectNode();
-        node.put("traceId", hex(span.getTraceId()));
-        node.put("spanId", hex(span.getSpanId()));
+        node.put("traceId", recoveredId(span.getTraceId()));
+        node.put("spanId", recoveredId(span.getSpanId()));
         if (!span.getParentSpanId().isEmpty()) {
-            node.put("parentSpanId", hex(span.getParentSpanId()));
+            node.put("parentSpanId", recoveredId(span.getParentSpanId()));
         }
         if (!span.getTraceState().isEmpty()) {
             node.put("traceState", span.getTraceState());
@@ -172,8 +177,8 @@ public final class OtlpJsonWriter {
         ArrayNode links = node.putArray("links");
         for (io.opentelemetry.proto.trace.v1.Span.Link link : span.getLinksList()) {
             ObjectNode linkNode = links.addObject();
-            linkNode.put("traceId", hex(link.getTraceId()));
-            linkNode.put("spanId", hex(link.getSpanId()));
+            linkNode.put("traceId", recoveredId(link.getTraceId()));
+            linkNode.put("spanId", recoveredId(link.getSpanId()));
             if (!link.getTraceState().isEmpty()) {
                 linkNode.put("traceState", link.getTraceState());
             }
@@ -216,10 +221,10 @@ public final class OtlpJsonWriter {
             node.put("flags", record.getFlags());
         }
         if (!record.getTraceId().isEmpty()) {
-            node.put("traceId", hex(record.getTraceId()));
+            node.put("traceId", recoveredId(record.getTraceId()));
         }
         if (!record.getSpanId().isEmpty()) {
-            node.put("spanId", hex(record.getSpanId()));
+            node.put("spanId", recoveredId(record.getSpanId()));
         }
         return node;
     }
@@ -360,14 +365,12 @@ public final class OtlpJsonWriter {
         };
     }
 
-    /** OTLP/JSON 规范：trace_id/span_id 为小写十六进制（非 ProtoJSON base64）。 */
-    private static String hex(com.google.protobuf.ByteString bytes) {
-        char[] out = new char[bytes.size() * 2];
-        for (int i = 0; i < bytes.size(); i++) {
-            int b = bytes.byteAt(i) & 0xFF;
-            out[i * 2] = HEX[b >>> 4];
-            out[i * 2 + 1] = HEX[b & 0x0F];
-        }
-        return new String(out);
+    /**
+     * id 字段还原（见类 javadoc）：collector-embedded 已把 SDK 的 hex id 串按 base64 解码成字节串，
+     * 此处 base64 编码回原字符串——对 OTLP/HTTP JSON 的 32/16 位 hex id 是无损逆变换，
+     * 输出即 SDK 发送的原始 id 字符串（存储/查询端按此对拍）。
+     */
+    private static String recoveredId(com.google.protobuf.ByteString bytes) {
+        return Base64.getEncoder().encodeToString(bytes.toByteArray());
     }
 }

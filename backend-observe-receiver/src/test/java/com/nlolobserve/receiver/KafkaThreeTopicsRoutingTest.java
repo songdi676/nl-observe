@@ -2,7 +2,6 @@ package com.nlolobserve.receiver;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.StringReader;
 import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -14,15 +13,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 
-import com.google.protobuf.util.JsonFormat;
-import io.opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest;
-import io.opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest;
-import io.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nlolobserve.common.model.OtlpLogPayload;
+import com.nlolobserve.common.model.OtlpMetricPayload;
+import com.nlolobserve.common.model.OtlpTracePayload;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -38,11 +39,17 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * T05 验收 #1（集成，env-gated 同 T03 口径）：Testcontainers Kafka 预建环境 + 进程内真实 OTLP 端点
- * （随机端口）→ 发样例 OTLP/JSON → 断言三 topic 消息体（OTLP/JSON 可解析、字段保真）与 key=nl.customer_id。
- * Docker 不可用或镜像不可得时按 assumption 跳过（内网镜像仓库预拉后关闭，T01 poc-notes §4.3）。
+ * （随机端口）→ 发样例 OTLP/JSON → 断言三 topic 消息体（common 模型可解析、字段保真）与 key=nl.customer_id。
+ * 评审 Minor-2：消息体用 common 侧 OTLP 模型（Otlp*Payload）解析而非 protobuf JsonFormat——
+ * 后者把 bytes 当 base64 解码，而 OTLP/JSON 的 trace/span id 是十六进制字符串，会静默损坏 id 字段；
+ * 并新增 hex id 无损往返断言。Docker 不可用或镜像不可得时按 assumption 跳过（内网镜像仓库预拉后关闭）。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class KafkaThreeTopicsRoutingTest {
+
+    private static final Logger LOG = LoggerFactory.getLogger(KafkaThreeTopicsRoutingTest.class);
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** 与 T01 poc 建议一致（confluent cp-kafka）；内网可用环境变量覆盖为已缓存镜像 */
     private static final String DEFAULT_IMAGE_NAME = "confluentinc/cp-kafka:7.7.1";
@@ -96,37 +103,34 @@ class KafkaThreeTopicsRoutingTest {
         assertLogsMessage(logMessages.get(0));
     }
 
-    // ---------- 断言 ----------
+    // ---------- 断言（common 模型解析，与 T08 存储端口径一致） ----------
 
     private void assertTracesMessage(String message) throws Exception {
-        ExportTraceServiceRequest request = parse(message, ExportTraceServiceRequest.getDefaultInstance());
-        var span = request.getResourceSpans(0).getScopeSpans(0).getSpans(0);
+        OtlpTracePayload payload = MAPPER.readValue(message, OtlpTracePayload.class);
+        OtlpTracePayload.Span span =
+                payload.getResourceSpans().get(0).getScopeSpans().get(0).getSpans().get(0);
         assertThat(span.getName()).isIn("biz.business.ORDER", "HTTP POST");
-        String customer = request.getResourceSpans(0).getResource().getAttributesList().stream()
+        // OTLP/JSON 的 trace/span id 为 32/16 位十六进制：经 common 模型往返后必须无损（评审 Minor-2）
+        assertThat(span.getTraceId()).as("traceId 应为 32 位 hex").matches("[0-9a-f]{32}");
+        assertThat(span.getSpanId()).as("spanId 应为 16 位 hex").matches("[0-9a-f]{16}");
+        String customer = payload.getResourceSpans().get(0).getResource().getAttributes().stream()
                 .filter(kv -> "nl.customer_id".equals(kv.getKey()))
                 .findFirst().orElseThrow().getValue().getStringValue();
         assertThat(customer).isEqualTo("CUST-001");
     }
 
     private void assertMetricsMessage(String message) throws Exception {
-        ExportMetricsServiceRequest request = parse(message, ExportMetricsServiceRequest.getDefaultInstance());
-        var metric = request.getResourceMetrics(0).getScopeMetrics(0).getMetrics(0);
+        OtlpMetricPayload payload = MAPPER.readValue(message, OtlpMetricPayload.class);
+        OtlpMetricPayload.Metric metric =
+                payload.getResourceMetrics().get(0).getScopeMetrics().get(0).getMetrics().get(0);
         assertThat(metric.getName()).isIn("nl.first_screen_load", "nl.business_duration");
     }
 
     private void assertLogsMessage(String message) throws Exception {
-        ExportLogsServiceRequest request = parse(message, ExportLogsServiceRequest.getDefaultInstance());
-        assertThat(request.getResourceLogs(0).getScopeLogs(0).getLogRecords(0).getBody().getStringValue())
+        OtlpLogPayload payload = MAPPER.readValue(message, OtlpLogPayload.class);
+        assertThat(payload.getResourceLogs().get(0).getScopeLogs().get(0).getLogRecords().get(0)
+                .getBody().getStringValue())
                 .isEqualTo("order submitted");
-    }
-
-    /** protobuf 4.x：Parser 不再暴露 newBuilderForType，改以 prototype 取 builder。 */
-    private static <T extends com.google.protobuf.Message> T parse(String json, T prototype) throws IOException {
-        var builder = prototype.toBuilder();
-        JsonFormat.parser().merge(new StringReader(json), builder);
-        @SuppressWarnings("unchecked")
-        T message = (T) builder.build();
-        return message;
     }
 
     /** 从 topic 消费直到收集到 expectedCount 条（30s 上限；topic 由 producer 自动创建）。 */
@@ -166,6 +170,8 @@ class KafkaThreeTopicsRoutingTest {
             container.start();
             return container;
         } catch (Throwable t) {
+            // 显式告警（评审 m5）：静默吞掉会使「IT 被跳过」在 CI 日志里不可见
+            LOG.warn("Kafka 容器启动失败（镜像={}），三 topic 集成测试将跳过", imageName, t);
             return null;
         }
     }

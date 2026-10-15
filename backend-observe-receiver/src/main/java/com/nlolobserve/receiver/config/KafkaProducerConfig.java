@@ -26,6 +26,7 @@ public class KafkaProducerConfig {
      * producerFactory 循环依赖，ApplicationContext 无法启动（T01 POC 首跑暴露，评审 Blocker）。
      */
     public static Map<String, Object> kafkaProducerProps(KafkaExporterProperties p) {
+        p.validate();
         Map<String, Object> m = new HashMap<>();
         m.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, p.getBootstrapServers());
         m.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);

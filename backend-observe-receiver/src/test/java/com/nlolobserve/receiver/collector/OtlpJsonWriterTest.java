@@ -63,6 +63,12 @@ class OtlpJsonWriterTest {
         assertThat(span.getName()).isEqualTo("biz.business.ORDER");
         assertThat(span.getKind()).isEqualTo(1);
 
+        // id 保真（T05 修复轮，评审 Minor-2）：collector-embedded 按 base64 解码 bytes 字段
+        // （与 OTLP/HTTP JSON 的 hex 口径错位），writer 经 recoveredId 逆变换后，
+        // 信封中的 traceId/spanId 必须与 SDK 发送的原始 hex 串逐字节一致
+        assertThat(span.getTraceId()).isEqualTo("4bf92f3577b34da6a3ce929d0e0e4736");
+        assertThat(span.getSpanId()).isEqualTo("00000000000000f1");
+
         // key = nl.customer_id
         assertThat(OtlpJsonWriter.customerId(wrapper.getResourceAttributes())).isEqualTo("CUST-001");
     }

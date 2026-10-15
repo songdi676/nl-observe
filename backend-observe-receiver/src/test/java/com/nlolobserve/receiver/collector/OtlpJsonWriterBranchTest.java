@@ -37,6 +37,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * T05（单元）：OtlpJsonWriter 合成分支覆盖——links/events/traceState/dropped 计数、
  * AnyValue 全类型（bool/double/bytes/kvlist/array）、histogram/exponentialHistogram/summary、
  * VALUE_NOT_SET 数值点、空 scope/name 省略分支、customerId 非字符串回退。
+ * id 字段断言口径（T05 修复轮）：writer 对 id 输出 base64(字节串)——对经 OTLP/HTTP JSON 入口
+ * 的真实链路（collector-embedded 把 hex id 按 base64 解码成字节），该编码精确还原 SDK 原始 hex 串
+ * （见 OtlpJsonWriterTest/KafkaThreeTopicsRoutingTest 的保真断言）；本类合成的是任意原始字节串，
+ * 断言其 base64 输出值。
  */
 class OtlpJsonWriterBranchTest {
 
@@ -84,14 +88,14 @@ class OtlpJsonWriterBranchTest {
 
         String json = OtlpJsonWriter.tracesEnvelope(wrapper);
         assertThat(json)
-                .contains("\"traceState\":\"k=v\"").contains("\"parentSpanId\":\"3736353433323130\"")
+                .contains("\"traceState\":\"k=v\"").contains("\"parentSpanId\":\"NzY1NDMyMTA=\"")
                 .contains("\"boolValue\":true").contains("\"doubleValue\":1.5")
                 .contains("\"bytesValue\":\"eA==")
                 .contains("\"kvlistValue\"").contains("\"intValue\":\"7\"")
                 .contains("\"arrayValue\"").contains("\"stringValue\":\"s\"")
                 .contains("\"droppedAttributesCount\":2").contains("\"droppedAttributesCount\":3")
                 .contains("\"events\":[{\"timeUnixNano\":\"3\",\"name\":\"ev\"")
-                .contains("\"links\":[{\"traceId\":\"30313233343536373839616263646566\"")
+                .contains("\"links\":[{\"traceId\":\"MDEyMzQ1Njc4OWFiY2RlZg==\"")
                 .contains("\"status\":{\"code\":2,\"message\":\"boom\"}");
 
         // customerId 非字符串属性：bool → "true"
@@ -198,8 +202,8 @@ class OtlpJsonWriterBranchTest {
         String json = OtlpJsonWriter.logsEnvelope(wrapper);
         assertThat(json).contains("\"severityNumber\":13").contains("\"severityText\":\"WARN\"")
                 .contains("\"flags\":16777216")
-                .contains("\"traceId\":\"30313233343536373839616263646566\"")
-                .contains("\"spanId\":\"3031323334353637\"")
+                .contains("\"traceId\":\"MDEyMzQ1Njc4OWFiY2RlZg==\"")
+                .contains("\"spanId\":\"MDEyMzQ1Njc=\"")
                 .contains("\"droppedAttributesCount\":1")
                 .doesNotContain("\"body\"");
     }

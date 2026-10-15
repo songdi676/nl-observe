@@ -19,13 +19,13 @@ import org.springframework.test.context.DynamicPropertySource;
 
 import static com.nlolobserve.receiver.metrics.DroppedCounter.METRIC_NAME;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * T05 故障注入（AC-10，NFR-02）：Kafka 不可达（「停 Kafka 容器」的无 Docker 等价口径，
  * T01 poc-notes §4.2 已验证）——bootstrap 指向死端口时：
- * 三信号 OTLP 入口仍返回 200（避免浏览器端重试风暴），producer 在 max-block-ms(5s) 内
- * 快速失败，nl.receiver.dropped 递增（入口响应不被 Kafka 阻塞）。
+ * 三信号 OTLP 入口仍返回 200 且响应 <1s（评审 Critical-1 修复后的严格口径：send 已卸载到
+ * 专用有界队列执行器，入口只入队即返回，绝不被 producer 的 max-block(5s) 阻塞），
+ * 失败计数在后台 sender 线程落地后 nl.receiver.dropped 递增。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class KafkaUnreachableDroppedTest {
@@ -37,7 +37,7 @@ class KafkaUnreachableDroppedTest {
     @DynamicPropertySource
     static void deadKafka(DynamicPropertyRegistry registry) {
         registry.add("observe.otlp.port", () -> OTLP_PORT);
-        // 127.0.0.1:19092 无 broker：send 在 max-block-ms(5000) 内同步快速失败
+        // 127.0.0.1:19092 无 broker：后台 sender 线程上 producer 在 max-block-ms(5000) 内快速失败
         registry.add("observe.kafka.bootstrap-servers", () -> "127.0.0.1:19092");
     }
 
@@ -56,11 +56,11 @@ class KafkaUnreachableDroppedTest {
             assertThat(resp.statusCode())
                     .as("OTLP/HTTP %s 在 Kafka 不可达时应仍返回 200（AC-10）", path)
                     .isEqualTo(200);
-            // 入口 fire-and-forget + 快速失败：响应不得被 broker 阻塞（max-block 5s 上限留裕量）
-            assertThat(elapsed).as("%s 入口响应应快速（<10s）", path).isLessThan(10_000L);
+            // 入口只入队（send 卸载到后台执行器）：响应不得被 broker 阻塞（评审 Critical-1 收紧口径）
+            assertThat(elapsed).as("%s 入口响应应快速（<1s）", path).isLessThan(1_000L);
         }
 
-        // 等待 subscriber 侧失败计数落地（每条记录 max-block 内 ~5s，串行分发；留 35s 上限）
+        // 等待后台 sender 线程失败计数落地（每条记录 max-block 内 ~5s，2-4 线程并行；留 35s 上限）
         long deadline = System.currentTimeMillis() + 35_000;
         while (droppedCount() <= before && System.currentTimeMillis() < deadline) {
             sleepQuietly(200);
@@ -93,7 +93,8 @@ class KafkaUnreachableDroppedTest {
 
     private static String readResource(String name) {
         try (InputStream in = KafkaUnreachableDroppedTest.class.getClassLoader().getResourceAsStream(name)) {
-            assumeTrue(in != null, "测试资源缺失: " + name);
+            // 资源缺失是测试缺陷而非环境跳过条件，必须失败而非 assumption（评审 m8/Nit）
+            assertThat(in).as("测试资源 %s 必须存在", name).isNotNull();
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new UncheckedIOException(e);

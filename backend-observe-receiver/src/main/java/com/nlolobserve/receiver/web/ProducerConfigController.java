@@ -37,7 +37,12 @@ public class ProducerConfigController {
         data.put("maxInFlight", props.getMaxInFlight());
         data.put("maxBlockMs", props.getMaxBlockMs());
         data.put("bufferMemory", props.getBufferMemory());
-        data.put("sendTimeoutMs", props.getSendTimeoutMs());
+        // 需求侧参数单列（评审 Minor）：sendTimeoutMs 无对应 kafka-clients producer 配置
+        // （kafka-clients 无 send.timeout.ms，见 KafkaExporterProperties javadoc），
+        // 与生效 producer 参数分置，避免对拍时被误当作生效值断言
+        Map<String, Object> requirementOnly = new LinkedHashMap<>();
+        requirementOnly.put("sendTimeoutMs", props.getSendTimeoutMs());
+        data.put("requirementOnly", requirementOnly);
         // 路由目标 topic（需求 yaml 同块参数，一并回显供断言）
         data.put("tracesTopic", props.getTracesTopic());
         data.put("metricsTopic", props.getMetricsTopic());

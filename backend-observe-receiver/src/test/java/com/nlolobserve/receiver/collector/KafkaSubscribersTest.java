@@ -2,10 +2,12 @@ package com.nlolobserve.receiver.collector;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -14,6 +16,7 @@ import java.io.InputStream;
 import java.io.StringReader;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeoutException;
@@ -38,7 +41,9 @@ import org.springframework.kafka.support.SendResult;
 
 /**
  * T05（单元）：Kafka 三 topic 写入订阅者——路由 topic、key=nl.customer_id、载荷 OTLP/JSON，
- * 以及 AC-10 丢弃计数两路径（send 同步抛出 / whenComplete 异步失败）与不向 collector 传播异常。
+ * 以及 AC-10 丢弃计数路径与不向 collector 传播异常。
+ * 注意（T05 修复轮，评审 Critical-1）：send 卸载到订阅者内专用有界队列执行器异步执行，
+ * 因此对 mock kafka 的交互与 dropped 断言一律用 timeout/await 轮询口径。
  */
 class KafkaSubscribersTest {
 
@@ -54,9 +59,11 @@ class KafkaSubscribersTest {
 
         subscriber.onNext(sampleSpan());
 
-        verify(kafka).send(eq("nl-observe.otlp.traces"), eq("CUST-001"),
+        // send 在专用后台执行器上执行（Critical-1 修复），用 timeout 口径等待送达
+        verify(kafka, timeout(3000)).send(eq("nl-observe.otlp.traces"), eq("CUST-001"),
                 contains("\"resourceSpans\""));
         assertThat(dropped.count()).isZero();
+        subscriber.shutdownSender();
     }
 
     @Test
@@ -66,9 +73,10 @@ class KafkaSubscribersTest {
 
         subscriber.onNext(sampleGaugeDataPoint());
 
-        verify(kafka).send(eq("nl-observe.otlp.metrics"), eq("CUST-001"),
+        verify(kafka, timeout(3000)).send(eq("nl-observe.otlp.metrics"), eq("CUST-001"),
                 contains("\"resourceMetrics\""));
         assertThat(dropped.count()).isZero();
+        subscriber.shutdownSender();
     }
 
     @Test
@@ -78,32 +86,36 @@ class KafkaSubscribersTest {
 
         subscriber.onNext(sampleLog());
 
-        verify(kafka).send(eq("nl-observe.otlp.logs"), eq("CUST-001"),
+        verify(kafka, timeout(3000)).send(eq("nl-observe.otlp.logs"), eq("CUST-001"),
                 contains("\"resourceLogs\""));
         assertThat(dropped.count()).isZero();
+        subscriber.shutdownSender();
     }
 
     @Test
     void sendSyncThrow_incrementsDropped_andDoesNotPropagate() {
-        // broker 不可达：send() 在 max-block-ms 内同步抛出（T01 poc-notes §1 Plan B 路径 1）
+        // 防御路径：后台执行器线程上 send 自身同步抛出（正常情形 KafkaTemplate.doSend 会把
+        // producer.send 的同步抛出转换为 failed future，走 whenComplete 计数——见 sendAsyncFailure）
         when(kafka.send(anyString(), anyString(), anyString()))
                 .thenThrow(new RuntimeException(new TimeoutException("Timeout waiting for metadata")));
         KafkaSpansSubscriber subscriber = new KafkaSpansSubscriber(kafka, props, dropped);
 
         assertThatCode(() -> subscriber.onNext(sampleSpan())).doesNotThrowAnyException();
-        assertThat(dropped.count()).isEqualTo(1.0);
+        await().atMost(Duration.ofSeconds(3)).until(() -> dropped.count() == 1.0);
+        subscriber.shutdownSender();
     }
 
     @Test
     void sendAsyncFailure_incrementsDropped() {
-        // 入队成功后的异步失败：whenComplete 异常分支计数（Plan B 路径 2）
+        // 入队成功后的异步失败：whenComplete 异常分支计数（Plan B 主路径）
         CompletableFuture<SendResult<String, String>> future = new CompletableFuture<>();
         future.completeExceptionally(new RuntimeException("broker down"));
         when(kafka.send(anyString(), anyString(), anyString())).thenReturn(future);
         KafkaSpansSubscriber subscriber = new KafkaSpansSubscriber(kafka, props, dropped);
 
         subscriber.onNext(sampleSpan());
-        assertThat(dropped.count()).isEqualTo(1.0);
+        await().atMost(Duration.ofSeconds(3)).until(() -> dropped.count() == 1.0);
+        subscriber.shutdownSender();
     }
 
     @Test
@@ -149,8 +161,9 @@ class KafkaSubscribersTest {
         subscriber.onNext(noCustomer);
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
-        verify(kafka).send(eq("nl-observe.otlp.traces"), key.capture(), anyString());
+        verify(kafka, timeout(3000)).send(eq("nl-observe.otlp.traces"), key.capture(), anyString());
         assertThat(key.getValue()).isEmpty();
+        subscriber.shutdownSender();
     }
 
     // ---------- 样例记录构造（与样例 OTLP/JSON 资源一致） ----------

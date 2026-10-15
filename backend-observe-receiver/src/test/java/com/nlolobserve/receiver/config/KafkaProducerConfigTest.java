@@ -1,6 +1,7 @@
 package com.nlolobserve.receiver.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.Map;
 
@@ -66,5 +67,19 @@ class KafkaProducerConfigTest {
                 .containsEntry(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 1)
                 .containsEntry(ProducerConfig.MAX_BLOCK_MS_CONFIG, 1000)
                 .containsEntry(ProducerConfig.BUFFER_MEMORY_CONFIG, 33554432L);
+    }
+
+    @Test
+    void inconsistentTimeouts_failFastAtAssembly() {
+        // 评审 Nit：delivery < linger + request 时 kafka-clients 会在 producer 构造期才报错，
+        // 装配入口显式 fail-fast（kafkaProducerProps → props.validate()），启动即暴露配置错误
+        KafkaExporterProperties p = new KafkaExporterProperties();
+        p.setDeliveryTimeoutMs(5000);
+        p.setLingerMs(2000);
+        p.setRequestTimeoutMs(4000);
+
+        assertThatThrownBy(() -> KafkaProducerConfig.kafkaProducerProps(p))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("delivery-timeout-ms");
     }
 }
