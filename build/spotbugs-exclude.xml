@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs 排除过滤器（T02 质量门：0 高危/中危）。
+  DTO/OTLP 模型是数据载体（Jackson 反序列化直接持有引用），EI_EXPOSE_REP 系列不适用。
+-->
+<FindBugsFilter>
+  <Match>
+    <Package name="~com\.nlolobserve\.common\.(dto|model)"/>
+    <Bug code="EI, EI2"/>
+  </Match>
+  <Match>
+    <Class name="com.nlolobserve.common.web.ApiResult"/>
+    <Bug code="EI, EI2"/>
+  </Match>
+</FindBugsFilter>
