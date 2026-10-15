@@ -1,0 +1,438 @@
+{
+  "info": {
+    "_postman_id": "b7f3a2c1-9d4e-4a6b-8c2f-7d1e0a9c4b32",
+    "name": "nl-observe query API（T10：业务列表 / span 树 / span 详情）",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "详设 §2.1/§2.2/§2.3 三端点正常+异常用例（Newman 执行）。\n\n前置：目标环境已按预置数据灌入（客户 {{customerId}} 在 [{{from}},{{to}}] 窗口内至少 1 个业务 root span，且存在 trace {{traceId}} / span {{spanId}}）。\n\n运行：newman run tests/api/observe-query.collection.json -e <env.json>\n可覆盖变量：baseUrl（默认 http://localhost:8081）、customerId、traceId、spanId、from、to、bizCode、emptyCustomerId、emptyTraceId、emptySpanId。\n\n断言口径：统一 {code,message,data}（§4.1）；参数错误 400/40001；无数据 404/40401。"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8081", "type": "string" },
+    { "key": "customerId", "value": "c-1", "type": "string" },
+    { "key": "traceId", "value": "t-1", "type": "string" },
+    { "key": "spanId", "value": "s-root", "type": "string" },
+    { "key": "from", "value": "2026-09-01", "type": "string" },
+    { "key": "to", "value": "2026-09-30", "type": "string" },
+    { "key": "bizCode", "value": "ORDER", "type": "string" },
+    { "key": "emptyCustomerId", "value": "c-no-such-customer", "type": "string" },
+    { "key": "emptyTraceId", "value": "ffffffffffffffffffffffffffffffff", "type": "string" },
+    { "key": "emptySpanId", "value": "ffffffffffffffff", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "businesses（§2.1 业务列表）",
+      "item": [
+        {
+          "name": "正常：from/to 齐全 → 200 code=0 列表字段完整",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('统一响应 {code,message,data}', () => {",
+                  "  pm.expect(body).to.have.property('code');",
+                  "  pm.expect(body).to.have.property('message');",
+                  "  pm.expect(body).to.have.property('data');",
+                  "});",
+                  "pm.test('code=0', () => pm.expect(body.code).to.eql(0));",
+                  "pm.test('data 为数组', () => pm.expect(body.data).to.be.an('array'));",
+                  "pm.test('列表元素含 bizId/bizCode/traceId/startTime/effectiveDurationMs/status/endReason', () => {",
+                  "  pm.expect(body.data.length).to.be.above(0);",
+                  "  for (const item of body.data) {",
+                  "    pm.expect(item).to.have.property('bizId');",
+                  "    pm.expect(item).to.have.property('bizCode');",
+                  "    pm.expect(item).to.have.property('traceId');",
+                  "    pm.expect(item).to.have.property('startTime');",
+                  "    pm.expect(item).to.have.property('effectiveDurationMs').that.is.a('number');",
+                  "    pm.expect(item).to.have.property('status');",
+                  "    pm.expect(item).to.have.property('endReason');",
+                  "  }",
+                  "});",
+                  "pm.test('按 startTime 倒序', () => {",
+                  "  const ts = body.data.map(i => Date.parse(i.startTime));",
+                  "  for (let i = 1; i < ts.length; i++) { pm.expect(ts[i] <= ts[i - 1]).to.be.true; }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/customers/{{customerId}}/businesses?from={{from}}&to={{to}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "customers", "{{customerId}}", "businesses"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" }
+              ]
+            },
+            "description": "详设 §2.1：业务 root span（name LIKE 'biz.business.%'）列表，start_time 倒序，LIMIT 200。"
+          }
+        },
+        {
+          "name": "正常：bizCode 过滤 → 200 code=0 仅命中该 bizCode",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('code=0', () => pm.expect(body.code).to.eql(0));",
+                  "pm.test('全部命中 bizCode', () => {",
+                  "  pm.expect(body.data.length).to.be.above(0);",
+                  "  for (const item of body.data) { pm.expect(item.bizCode).to.eql(pm.variables.get('bizCode')); }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/customers/{{customerId}}/businesses?from={{from}}&to={{to}}&bizCode={{bizCode}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "customers", "{{customerId}}", "businesses"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" },
+                { "key": "bizCode", "value": "{{bizCode}}" }
+              ]
+            },
+            "description": "哨兵过滤 ('' = :bizCode OR biz_code = :bizCode)：指定 bizCode 时仅返回该业务。"
+          }
+        },
+        {
+          "name": "异常：缺 from → 400 code=40001",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test('code=40001', () => pm.expect(body.code).to.eql(40001));",
+                  "pm.test('data=null', () => pm.expect(body).to.have.property('data', null));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/customers/{{customerId}}/businesses?to={{to}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "customers", "{{customerId}}", "businesses"],
+              "query": [{ "key": "to", "value": "{{to}}" }]
+            },
+            "description": "from 必填（详设 §1.4）。"
+          }
+        },
+        {
+          "name": "异常：缺 to → 400 code=40001",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('code=40001', () => pm.expect(pm.response.json().code).to.eql(40001));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/customers/{{customerId}}/businesses?from={{from}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "customers", "{{customerId}}", "businesses"],
+              "query": [{ "key": "from", "value": "{{from}}" }]
+            },
+            "description": "to 必填（详设 §1.4）。"
+          }
+        },
+        {
+          "name": "异常：跨度 >31 天 → 400 code=40001",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('code=40001', () => pm.expect(pm.response.json().code).to.eql(40001));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/customers/{{customerId}}/businesses?from=2026-09-01&to=2026-10-02",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "customers", "{{customerId}}", "businesses"],
+              "query": [
+                { "key": "from", "value": "2026-09-01" },
+                { "key": "to", "value": "2026-10-02" }
+              ]
+            },
+            "description": "32 天窗口 > MAX_SPAN_DAYS=31 → 40001。"
+          }
+        },
+        {
+          "name": "异常：日期格式非法 → 400 code=40001",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('code=40001', () => pm.expect(pm.response.json().code).to.eql(40001));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/customers/{{customerId}}/businesses?from=20260901&to={{to}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "customers", "{{customerId}}", "businesses"],
+              "query": [
+                { "key": "from", "value": "20260901" },
+                { "key": "to", "value": "{{to}}" }
+              ]
+            },
+            "description": "非 yyyy-MM-dd → 40001。"
+          }
+        },
+        {
+          "name": "异常：无数据（未知客户）→ 404 code=40401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('code=40401', () => pm.expect(pm.response.json().code).to.eql(40401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/customers/{{emptyCustomerId}}/businesses?from={{from}}&to={{to}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "customers", "{{emptyCustomerId}}", "businesses"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" }
+              ]
+            },
+            "description": "客户无业务数据 → 40401（详设 §4.1）。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "trace（§2.2 span 树）",
+      "item": [
+        {
+          "name": "正常：span 树含白名单属性与 events 字段 → 200 code=0",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('code=0', () => pm.expect(body.code).to.eql(0));",
+                  "pm.test('data.traceId 回显', () => pm.expect(body.data.traceId).to.eql(pm.variables.get('traceId')));",
+                  "pm.test('data.spans 非空数组', () => {",
+                  "  pm.expect(body.data.spans).to.be.an('array').that.is.not.empty;",
+                  "});",
+                  "pm.test('span 节点字段完整（含 attributes 对象与 events 数组）', () => {",
+                  "  for (const s of body.data.spans) {",
+                  "    pm.expect(s).to.have.property('spanId');",
+                  "    pm.expect(s).to.have.property('parentSpanId');",
+                  "    pm.expect(s).to.have.property('name');",
+                  "    pm.expect(s).to.have.property('kind').that.is.a('number');",
+                  "    pm.expect(s).to.have.property('startTime');",
+                  "    pm.expect(s).to.have.property('endTime');",
+                  "    pm.expect(s).to.have.property('statusCode').that.is.a('number');",
+                  "    pm.expect(s).to.have.property('durationMs').that.is.a('number');",
+                  "    pm.expect(s).to.have.property('effectiveDurationMs').that.is.a('number');",
+                  "    pm.expect(s.attributes).to.be.an('object');",
+                  "    pm.expect(s.events).to.be.an('array');",
+                  "  }",
+                  "});",
+                  "pm.test('REST span 白名单属性透出（http.* / nl.duration_ms）', () => {",
+                  "  const rest = body.data.spans.filter(s => s.attributes['http.request.method'] !== undefined);",
+                  "  for (const s of rest) {",
+                  "    pm.expect(s.attributes).to.have.property('http.route');",
+                  "    pm.expect(s.attributes).to.have.property('http.response.status_code');",
+                  "    pm.expect(s.attributes).to.have.property('nl.duration_ms');",
+                  "  }",
+                  "});",
+                  "pm.test('按 startTime 正序', () => {",
+                  "  const ts = body.data.spans.map(s => Date.parse(s.startTime));",
+                  "  for (let i = 1; i < ts.length; i++) { pm.expect(ts[i] >= ts[i - 1]).to.be.true; }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/customers/{{customerId}}/traces/{{traceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "customers", "{{customerId}}", "traces", "{{traceId}}"]
+            },
+            "description": "FINAL 查询全 span（详设 §2.2），平铺 spans 带 parentSpanId，前端建树。"
+          }
+        },
+        {
+          "name": "异常：trace 无数据 → 404 code=40401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('code=40401', () => pm.expect(pm.response.json().code).to.eql(40401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/customers/{{customerId}}/traces/{{emptyTraceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "customers", "{{customerId}}", "traces", "{{emptyTraceId}}"]
+            },
+            "description": "trace 不存在 → 40401。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "span（§2.3 单 span 详情）",
+      "item": [
+        {
+          "name": "正常：全字段且 JSON 字段为对象 → 200 code=0",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('code=0', () => pm.expect(body.code).to.eql(0));",
+                  "pm.test('span 标识回显', () => {",
+                  "  pm.expect(body.data.traceId).to.eql(pm.variables.get('traceId'));",
+                  "  pm.expect(body.data.spanId).to.eql(pm.variables.get('spanId'));",
+                  "});",
+                  "pm.test('全字段存在', () => {",
+                  "  for (const k of ['parentSpanId', 'traceState', 'name', 'kind', 'startTime', 'endTime',",
+                  "    'statusCode', 'statusMessage', 'bizCode', 'serviceName', 'durationMs', 'effectiveDurationMs']) {",
+                  "    pm.expect(body.data).to.have.property(k);",
+                  "  }",
+                  "});",
+                  "pm.test('resource/scope/attributes 解析为对象（非字符串）', () => {",
+                  "  pm.expect(body.data.resource).to.be.an('object');",
+                  "  pm.expect(body.data.scope).to.be.an('object');",
+                  "  pm.expect(body.data.attributes).to.be.an('object');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/customers/{{customerId}}/traces/{{traceId}}/spans/{{spanId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "customers", "{{customerId}}", "traces", "{{traceId}}", "spans", "{{spanId}}"]
+            },
+            "description": "单 span 全字段（详设 §2.3）：attributes_json/resource_json/scope_json 解析为对象。"
+          }
+        },
+        {
+          "name": "异常：span 无数据 → 404 code=40401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('code=40401', () => pm.expect(pm.response.json().code).to.eql(40401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/customers/{{customerId}}/traces/{{traceId}}/spans/{{emptySpanId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "customers", "{{customerId}}", "traces", "{{traceId}}", "spans", "{{emptySpanId}}"]
+            },
+            "description": "span 不存在 → 40401。"
+          }
+        },
+        {
+          "name": "异常：trace 下无该 span（跨 trace 三元组）→ 404 code=40401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('code=40401', () => pm.expect(pm.response.json().code).to.eql(40401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/customers/{{customerId}}/traces/{{emptyTraceId}}/spans/{{spanId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "customers", "{{customerId}}", "traces", "{{emptyTraceId}}", "spans", "{{spanId}}"]
+            },
+            "description": "(customerId, traceId, spanId) 三元组精确匹配：span 存在但 trace 不符 → 40401。"
+          }
+        }
+      ]
+    }
+  ]
+}
