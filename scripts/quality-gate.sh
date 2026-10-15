@@ -110,8 +110,25 @@ run_backend() {
   fi
   # Dependency-Check：与 CI 模板同命令（mvn dependency-check:check），保证"同命令同阈值"口径。
   # pom.xml 未配置插件时 mvn 报错退出非 0 → 门失败（安全门从严，指引中说明配置方法）
-  if ! "$MVN" dependency-check:check >/dev/null 2>&1; then
-    dep_status=fail; dep_detail="依赖漏洞扫描未通过或未配置"; dep_sug='["运行 mvn dependency-check:check 查看明细；若报插件缺失，在 pom.xml 配置 org.owasp:dependency-check-maven 插件"]'
+  # 执行时限（本轮质量门诊断修复）：NVD 数据源不可达时 dependency-check 会无限期挂起
+  # （TCP 连接建立但无响应，实测 30+ 分钟无进展、漏洞库 0 字节增长），导致整个质量门
+  # 无 JSON 输出、调用方超时盲失败。用 timeout 限定单次执行：默认 420s（留出其余三门
+  # 执行余量、低于常见 600s 工具超时），CI 可用 ODC_TIMEOUT=<秒> 放宽。
+  # 超时按门失败处理并给出可诊断 hint——不改变任何阈值与判定口径（从严原则同 mvn 缺失）。
+  local ODC_RC=0
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${ODC_TIMEOUT:-420}" "$MVN" dependency-check:check >/dev/null 2>&1 || ODC_RC=$?
+  else
+    "$MVN" dependency-check:check >/dev/null 2>&1 || ODC_RC=$?
+  fi
+  if [ "$ODC_RC" -ne 0 ]; then
+    dep_status=fail
+    if [ "$ODC_RC" -eq 124 ]; then
+      dep_detail="依赖漏洞扫描超时（${ODC_TIMEOUT:-420}s）：NVD 数据源不可达或漏洞库更新未完成"
+      dep_sug='["确认 services.nvd.nist.gov 可达（或配置 nvdApiEndpoint/代理）后重跑；离线环境需预先填充 dataDirectory 漏洞库并设 autoUpdate=false；CI 可 ODC_TIMEOUT 放宽时限"]'
+    else
+      dep_detail="依赖漏洞扫描未通过或未配置"; dep_sug='["运行 mvn dependency-check:check 查看明细；若报插件缺失，在 pom.xml 配置 org.owasp:dependency-check-maven 插件"]'
+    fi
   fi
 
   local overall=pass
