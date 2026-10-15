@@ -81,6 +81,23 @@
           <groupId>org.jacoco</groupId>
           <artifactId>jacoco-maven-plugin</artifactId>
           <version>${jacoco-plugin.version}</version>
+          <!-- rules 置于 plugin 级：使绑定执行与 CLI 直跑（质量门口径
+               mvn test jacoco:report jacoco:check）共用同一 80% 行覆盖阈值；
+               仅放 execution 内时 default-cli 执行无 rules，CLI 直跑 check 会报错 -->
+          <configuration>
+            <rules>
+              <rule>
+                <element>BUNDLE</element>
+                <limits>
+                  <limit>
+                    <counter>LINE</counter>
+                    <value>COVEREDRATIO</value>
+                    <minimum>0.80</minimum>
+                  </limit>
+                </limits>
+              </rule>
+            </rules>
+          </configuration>
           <executions>
             <execution>
               <id>prepare-agent</id>
@@ -100,20 +117,6 @@
               <goals>
                 <goal>check</goal>
               </goals>
-              <configuration>
-                <rules>
-                  <rule>
-                    <element>BUNDLE</element>
-                    <limits>
-                      <limit>
-                        <counter>LINE</counter>
-                        <value>COVEREDRATIO</value>
-                        <minimum>0.80</minimum>
-                      </limit>
-                    </limits>
-                  </rule>
-                </rules>
-              </configuration>
             </execution>
           </executions>
         </plugin>
