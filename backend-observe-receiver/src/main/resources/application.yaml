@@ -1,0 +1,10 @@
+# T04 receiver 骨架配置（详设 §5）；Kafka/安全配置项随 T05/T06 接入
+observe:
+  otlp:
+    # OTLP/HTTP 接收端口（Vert.x，独立于 servlet 端口）；集成测试用随机端口覆盖
+    port: ${OBSERVE_OTLP_PORT:4318}
+
+logging:
+  level:
+    # 默认 INFO：DEBUG 可能把遥测载荷细节写入日志（安全评审 A09，同 POC 口径）
+    com.nlolobserve.receiver: INFO

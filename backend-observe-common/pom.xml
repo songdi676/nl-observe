@@ -39,11 +39,9 @@
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
-        <!-- 质量门读取仓库根 target/site/jacoco/jacoco.csv；多模块下将本模块报告直接输出到仓库根。
-             注意：新增后端模块后此路径会被后构建模块的 csv 覆盖，届时需改为聚合报告方案。 -->
-        <configuration>
-          <outputDirectory>${maven.multiModuleProjectDirectory}/target/site/jacoco</outputDirectory>
-        </configuration>
+        <!-- T04 起：本模块报告落位模块自身 target/；仓库根 target/site/jacoco/jacoco.csv
+             （质量门读取处）由 backend-observe-coverage 的 report-aggregate 聚合产出，
+             避免多模块直接写根目录互相覆盖。 -->
       </plugin>
     </plugins>
   </build>

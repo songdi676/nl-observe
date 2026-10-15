@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  T04：receiver Spring Boot 骨架 + 内嵌 collector-embedded 1.2.1 + OTLP/HTTP 4318。
+  嵌入方式按 T01 poc-notes §1/§5：collector 核心（无内建 exporter）经 Vert.x Router
+  暴露 /v1/traces、/v1/metrics；gRPC 4317 不启用；SmartLifecycle 管理启停。
+  Kafka 三 topic 写入与 /config/producer 为 T05，安全过滤器为 T06。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.nlolobserve</groupId>
+    <artifactId>nl-observe</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>backend-observe-receiver</artifactId>
+  <name>backend-observe-receiver</name>
+  <description>OTLP/HTTP 接收端：内嵌 collector-embedded，按信号路由三 topic（T04 骨架）</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.nlolobserve</groupId>
+      <artifactId>backend-observe-common</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- 内嵌 collector（详设 §1.2）：传递引入 vertx-web/vertx-grpc-server 5.1.8、
+         protobuf 4.36.1、opentelemetry-api/proto（版本由根 pom 属性覆盖对齐，见根 pom 注释） -->
+    <dependency>
+      <groupId>io.mishmash.opentelemetry</groupId>
+      <artifactId>collector-embedded</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -20,6 +20,9 @@
 
   <modules>
     <module>backend-observe-common</module>
+    <module>backend-observe-receiver</module>
+    <!-- 覆盖率聚合模块：必须保持在最后，report-aggregate 依赖前面模块的 exec 产物 -->
+    <module>backend-observe-coverage</module>
   </modules>
 
   <properties>
@@ -32,6 +35,14 @@
     <spotbugs-plugin.version>4.7.3.6</spotbugs-plugin.version>
     <jacoco-plugin.version>0.8.12</jacoco-plugin.version>
     <dependency-check-plugin.version>12.1.0</dependency-check-plugin.version>
+    <!-- T04：collector-embedded 1.2.1（T01 poc-notes §1 锁定坐标） -->
+    <collector-embedded.version>1.2.1</collector-embedded.version>
+    <!-- T04：覆盖 spring-boot-dependencies 的 netty 4.1.x 版本属性——
+         collector-embedded 的 Vert.x 5.1.8 运行依赖 netty 4.2.x（T01 版本矩阵），
+         沿用 Spring Boot 的 4.1.x 会在 Vert.x 启动时触发类/方法不兼容 -->
+    <netty.version>4.2.18.Final</netty.version>
+    <!-- T04：与 collector-embedded 1.2.1 parent 锁定的 opentelemetry-api 对齐（覆盖 SB 的 1.37.0） -->
+    <opentelemetry.version>1.65.0</opentelemetry.version>
   </properties>
 
   <dependencyManagement>
@@ -40,6 +51,11 @@
         <groupId>com.nlolobserve</groupId>
         <artifactId>backend-observe-common</artifactId>
         <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.mishmash.opentelemetry</groupId>
+        <artifactId>collector-embedded</artifactId>
+        <version>${collector-embedded.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>

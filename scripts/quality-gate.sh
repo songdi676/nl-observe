@@ -90,6 +90,18 @@ run_backend() {
   local cov_status=pass cov_line=0 cov_threshold=${COV_BACKEND:-80} cov_hint=""
   local dep_status=pass dep_detail="无高危漏洞" dep_sug='[]'
 
+  # 多模块 reactor（T04 起后端为 common→receiver→coverage 三模块）：
+  # spotbugs/dependency-check 的 CLI 裸 goal 调用不构建 reactor 依赖，
+  # 跨模块快照构件须已安装本地仓库，否则解析失败被误判为"违规"。
+  # 先跑一次 install -DskipTests（跳过测试：覆盖率产物仍读 mvn test
+  # jacoco:report 生成的 csv，不受影响）。编译/装配失败 → 直接判失败
+  # （无法编译的代码不应通过任何门），挂到 spotbugs 槽位并保留明细提示。
+  local install_rc=0
+  "$MVN" -q install -DskipTests >/dev/null 2>&1 || install_rc=$?
+  if [ "$install_rc" -ne 0 ]; then
+    sb_status=fail; sb_detail="mvn install -DskipTests 未通过（编译或模块间依赖问题），其余门结果不可信"
+  fi
+
   if ! "$MVN" checkstyle:check >/dev/null 2>&1; then
     cs_status=fail; cs_detail="checkstyle 违规（阿里 P3C）"; cs_sug='["运行 mvn checkstyle:check 查看违规明细并修复"]'
   fi
