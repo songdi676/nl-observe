@@ -15,11 +15,15 @@ import java.util.function.BiFunction;
 
 import io.mishmash.opentelemetry.server.collector.Batch;
 import io.mishmash.opentelemetry.server.collector.Instrumentation;
+import io.mishmash.opentelemetry.server.collector.Log;
+import io.mishmash.opentelemetry.server.collector.LogsSubscriber;
 import io.mishmash.opentelemetry.server.collector.MetricDataPoint;
 import io.mishmash.opentelemetry.server.collector.MetricsSubscriber;
 import io.mishmash.opentelemetry.server.collector.Span;
 import io.mishmash.opentelemetry.server.collector.SpansSubscriber;
 import io.opentelemetry.context.Context;
+import io.opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest;
+import io.opentelemetry.proto.collector.logs.v1.ExportLogsServiceResponse;
 import io.opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest;
 import io.opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceResponse;
 import io.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
@@ -29,13 +33,15 @@ import io.vertx.core.http.HttpServer;
 import io.vertx.ext.web.Router;
 import org.junit.jupiter.api.Test;
 
+import com.nlolobserve.receiver.collector.ContextSafeLogsCollector;
 import com.nlolobserve.receiver.collector.ContextSafeMetricsCollector;
 import com.nlolobserve.receiver.collector.ContextSafeTracesCollector;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * ContextSafe* 覆写（2 参 publish）的故障分支覆盖（T04 评审 Major：失败分支不得静默）。
+ * ContextSafe* 覆写（2 参 publish）的故障分支覆盖（T04 评审 Major：失败分支不得静默；
+ * T05 补齐 logs 信号同口径分支）。
  * 用测试子类直接注入三种故障，经真实 Vert.x HTTP 服务器验证入口状态码：
  * 4 参 publish 抛出 → 500；处理超 10s 上限 → 503；响应构建失败 → 503。
  * 注意：超时用例各耗时约 10s（超时语义本身即等待，属设计内代价）。
@@ -82,6 +88,26 @@ class ContextSafeCollectorBranchTest {
                 ContextSafeCollectorBranchTest::failingResponseMetrics);
     }
 
+    // ---------- logs ----------
+
+    @Test
+    void logsPublishFailure_returns500() throws Exception {
+        assertLogsStatus(500, "otlp/sample-logs.json",
+                ContextSafeCollectorBranchTest::throwingLogs);
+    }
+
+    @Test
+    void logsPublishTimeout_returns503() throws Exception {
+        assertLogsStatus(503, "otlp/sample-logs.json",
+                ContextSafeCollectorBranchTest::slowLogs);
+    }
+
+    @Test
+    void logsResponseBuildFailure_returns503() throws Exception {
+        assertLogsStatus(503, "otlp/sample-logs.json",
+                ContextSafeCollectorBranchTest::failingResponseLogs);
+    }
+
     // ---------- 脚手架 ----------
 
     private static void assertTracesStatus(int expected, String resource,
@@ -121,6 +147,29 @@ class ContextSafeCollectorBranchTest {
             await(server.listen(freePort()));
             int actual = post(server.actualPort(), "/v1/metrics", readResource(resource));
             assertThat(actual).as("OTLP/HTTP /v1/metrics 入口状态码").isEqualTo(expected);
+        } finally {
+            collector.close();
+            if (server != null) {
+                server.close();
+            }
+            vertx.close();
+        }
+    }
+
+    private static void assertLogsStatus(int expected, String resource,
+                                         BiFunction<Vertx, Instrumentation, ContextSafeLogsCollector> factory)
+            throws Exception {
+        Vertx vertx = Vertx.vertx();
+        ContextSafeLogsCollector collector = factory.apply(vertx, new Instrumentation());
+        HttpServer server = null;
+        try {
+            collector.subscribe(noopLogsSubscriber());
+            Router router = Router.router(vertx);
+            collector.bind(router);
+            server = vertx.createHttpServer().requestHandler(router);
+            await(server.listen(freePort()));
+            int actual = post(server.actualPort(), "/v1/logs", readResource(resource));
+            assertThat(actual).as("OTLP/HTTP /v1/logs 入口状态码").isEqualTo(expected);
         } finally {
             collector.close();
             if (server != null) {
@@ -205,6 +254,42 @@ class ContextSafeCollectorBranchTest {
         };
     }
 
+    private static ContextSafeLogsCollector throwingLogs(Vertx vertx, Instrumentation instrumentation) {
+        return new ContextSafeLogsCollector(vertx, instrumentation) {
+            @Override
+            protected Batch<Log> publish(ExportLogsServiceRequest request, String transport,
+                                         String encoding, Context otelContext) {
+                throw new IllegalStateException("测试注入：发布失败");
+            }
+        };
+    }
+
+    private static ContextSafeLogsCollector slowLogs(Vertx vertx, Instrumentation instrumentation) {
+        return new ContextSafeLogsCollector(vertx, instrumentation) {
+            @Override
+            protected Batch<Log> publish(ExportLogsServiceRequest request, String transport,
+                                         String encoding, Context otelContext) {
+                try {
+                    Thread.sleep(11_000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.publish(request, transport, encoding, otelContext);
+            }
+        };
+    }
+
+    private static ContextSafeLogsCollector failingResponseLogs(Vertx vertx, Instrumentation instrumentation) {
+        return new ContextSafeLogsCollector(vertx, instrumentation) {
+            @Override
+            public ExportLogsServiceResponse getBatchResponse(ExportLogsServiceRequest request,
+                                                              Batch<Log> completedBatch,
+                                                              String transport, String encoding) {
+                throw new IllegalStateException("测试注入：响应构建失败");
+            }
+        };
+    }
+
     // ---------- 辅助 ----------
 
     private static SpansSubscriber noopSpansSubscriber() {
@@ -240,6 +325,30 @@ class ContextSafeCollectorBranchTest {
 
             @Override
             public void onNext(MetricDataPoint dataPoint) {
+                // no-op
+            }
+
+            @Override
+            public void onError(Throwable throwable) {
+                // no-op
+            }
+
+            @Override
+            public void onComplete() {
+                // no-op
+            }
+        };
+    }
+
+    private static LogsSubscriber noopLogsSubscriber() {
+        return new LogsSubscriber() {
+            @Override
+            public void onSubscribe(Flow.Subscription subscription) {
+                subscription.request(Long.MAX_VALUE);
+            }
+
+            @Override
+            public void onNext(Log log) {
                 // no-op
             }
 

@@ -2,8 +2,10 @@
 <!--
   T04：receiver Spring Boot 骨架 + 内嵌 collector-embedded 1.2.1 + OTLP/HTTP 4318。
   嵌入方式按 T01 poc-notes §1/§5：collector 核心（无内建 exporter）经 Vert.x Router
-  暴露 /v1/traces、/v1/metrics；gRPC 4317 不启用；SmartLifecycle 管理启停。
-  Kafka 三 topic 写入与 /config/producer 为 T05，安全过滤器为 T06。
+  暴露 /v1/traces、/v1/metrics、/v1/logs；gRPC 4317 不启用；SmartLifecycle 管理启停。
+  T05：Kafka 三 topic 写入（spring-kafka + kafka-clients，参数与需求 yaml 一致）+
+  /config/producer（回显生效参数）+ 丢弃计数 nl.receiver.dropped（micrometer-core）。
+  安全过滤器为 T06。
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -30,6 +32,18 @@
       <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
 
+    <!-- T05：Kafka producer（三 topic 写入）；版本由 SB BOM 管理，kafka-clients 传递引入 -->
+    <dependency>
+      <groupId>org.springframework.kafka</groupId>
+      <artifactId>spring-kafka</artifactId>
+    </dependency>
+
+    <!-- T05：丢弃计数 nl.receiver.dropped（无 actuator，显式 SimpleMeterRegistry 注册） -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+    </dependency>
+
     <!-- 内嵌 collector（详设 §1.2）：传递引入 vertx-web/vertx-grpc-server 5.1.8、
          protobuf 4.36.1、opentelemetry-api/proto（版本由根 pom 属性覆盖对齐，见根 pom 注释） -->
     <dependency>
@@ -40,6 +54,18 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- T05 集成测试：Testcontainers Kafka（镜像不可得时按 assumption 跳过，同 T03 Databend 口径） -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>kafka</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>

@@ -7,6 +7,8 @@ import java.util.concurrent.TimeoutException;
 import com.nlolobserve.receiver.config.OtlpProperties;
 
 import io.mishmash.opentelemetry.server.collector.Instrumentation;
+import io.mishmash.opentelemetry.server.collector.LogsCollector;
+import io.mishmash.opentelemetry.server.collector.LogsSubscriber;
 import io.mishmash.opentelemetry.server.collector.MetricsCollector;
 import io.mishmash.opentelemetry.server.collector.MetricsSubscriber;
 import io.mishmash.opentelemetry.server.collector.SpansSubscriber;
@@ -22,13 +24,13 @@ import org.springframework.stereotype.Component;
 
 /**
  * 内嵌 collector-embedded 1.2.1 生命周期（详设 §1.2，T04）。
- * start：Vert.x HTTP 服务器绑定 observe.otlp.port（默认 4318），TracesCollector/MetricsCollector
- * 经 Router 暴露 POST /v1/traces、/v1/metrics（OTLP/JSON 与 protobuf 均可，T01 poc-notes §1）；
+ * start：Vert.x HTTP 服务器绑定 observe.otlp.port（默认 4318），Traces/Metrics/Logs Collector
+ * 经 Router 暴露 POST /v1/traces、/v1/metrics、/v1/logs（OTLP/JSON 与 protobuf 均可，T01 poc-notes §1）；
  * 仅启用 HTTP，不绑定 GrpcServer（gRPC 4317 不启用）。
  * stop：关闭 collector（含其 ForkJoinPool）、HTTP 服务器与 Vert.x（事件循环/worker 线程），
  * 应用关闭无端口泄漏。
  * collector-embedded 无内建 exporter（T01 poc-notes §1）：下游写入点是注册的 subscriber，
- * T04 用占位订阅者打通接收，T05 替换为 Kafka 三 topic 写入。
+ * T05 以 Kafka 三 topic 写入订阅者（KafkaSpans/Metrics/LogsSubscriber）按信号路由。
  */
 @Component
 public class EmbeddedCollectorConfig implements SmartLifecycle {
@@ -41,24 +43,28 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
     private final OtlpProperties otlpProperties;
     private final SpansSubscriber spansSubscriber;
     private final MetricsSubscriber metricsSubscriber;
+    private final LogsSubscriber logsSubscriber;
 
     private Vertx vertx;
     private HttpServer httpServer;
     private TracesCollector tracesCollector;
     private MetricsCollector metricsCollector;
+    private LogsCollector logsCollector;
     private volatile boolean running;
 
     /**
-     * subscriber 经构造注入（T04 默认占位实现为 @Component；T05 替换为 Kafka 写入订阅者）。
+     * subscriber 经构造注入（T05 为 Kafka 三 topic 写入订阅者 @Component）。
      * 测试：@MockitoBean 替换订阅者验证端到端投递（OtlpSubscriberDeliveryTest）；
      * ContextSafe* 覆写的失败分支由测试子类直接注入故障覆盖（ContextSafeCollectorBranchTest）。
      */
     public EmbeddedCollectorConfig(OtlpProperties otlpProperties,
                                    SpansSubscriber spansSubscriber,
-                                   MetricsSubscriber metricsSubscriber) {
+                                   MetricsSubscriber metricsSubscriber,
+                                   LogsSubscriber logsSubscriber) {
         this.otlpProperties = otlpProperties;
         this.spansSubscriber = spansSubscriber;
         this.metricsSubscriber = metricsSubscriber;
+        this.logsSubscriber = logsSubscriber;
     }
 
     @Override
@@ -70,10 +76,13 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
         // ContextSafe* 子类适配 1.2.1 的 HTTP 通路缺陷（见类注释），绑定路由与库行为一致
         tracesCollector = new ContextSafeTracesCollector(vertx, instrumentation);
         metricsCollector = new ContextSafeMetricsCollector(vertx, instrumentation);
+        logsCollector = new ContextSafeLogsCollector(vertx, instrumentation);
         tracesCollector.subscribe(spansSubscriber);
         metricsCollector.subscribe(metricsSubscriber);
+        logsCollector.subscribe(logsSubscriber);
         tracesCollector.bind(router);
         metricsCollector.bind(router);
+        logsCollector.bind(router);
         httpServer = vertx.createHttpServer().requestHandler(router);
         try {
             await(httpServer.listen(otlpProperties.getPort()), "OTLP/HTTP listen");
@@ -100,6 +109,9 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
         }
         if (metricsCollector != null) {
             metricsCollector.close();
+        }
+        if (logsCollector != null) {
+            logsCollector.close();
         }
         if (httpServer != null) {
             await(httpServer.close(), "HTTP server close");

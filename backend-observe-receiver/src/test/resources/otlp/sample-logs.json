@@ -1,0 +1,31 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "nl-observe-web"}},
+          {"key": "nl.customer_id", "value": {"stringValue": "CUST-001"}}
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {"name": "sdk-web", "version": "0.1.0"},
+          "logRecords": [
+            {
+              "timeUnixNano": "1759020000500000000",
+              "observedTimeUnixNano": "1759020000500000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": {"stringValue": "order submitted"},
+              "attributes": [
+                {"key": "nl.customer_id", "value": {"stringValue": "CUST-001"}}
+              ],
+              "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+              "spanId": "00000000000000f1"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
