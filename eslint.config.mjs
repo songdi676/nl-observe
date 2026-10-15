@@ -9,6 +9,7 @@ export default tseslint.config(
       '**/target/**',
       '**/*.log',
       '**/package-lock.json',
+      'sdk-web/dist/**',
     ],
   },
   js.configs.recommended,

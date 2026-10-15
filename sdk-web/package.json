@@ -1,0 +1,59 @@
+{
+  "name": "@nl-observe/sdk-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "nl-observe 前端 SDK 包骨架：框架无关 core（index.ts）+ vue2.ts/vue3.ts 双入口，tsup es/cjs 双格式构建。OTel 依赖版本按 T01 锁定（poc/poc-notes.md §2）。",
+  "license": "UNLICENSED",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./vue2": {
+      "types": "./dist/vue2.d.ts",
+      "import": "./dist/vue2.js",
+      "require": "./dist/vue2.cjs"
+    },
+    "./vue3": {
+      "types": "./dist/vue3.d.ts",
+      "import": "./dist/vue3.js",
+      "require": "./dist/vue3.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "pretest": "npm run build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "0.223.0",
+    "@opentelemetry/resources": "2.12.0",
+    "@opentelemetry/sdk-metrics": "2.12.0",
+    "@opentelemetry/sdk-trace-base": "2.12.0",
+    "@opentelemetry/sdk-trace-web": "2.12.0"
+  },
+  "peerDependencies": {
+    "vue": "^2.0.0 || ^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vue": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsup": "^8.5.0",
+    "typescript": "5.9.3",
+    "vitest": "5.0.4"
+  }
+}

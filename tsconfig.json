@@ -7,7 +7,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": [],
+    "types": ["node"],
     "lib": ["ES2020", "DOM"]
   },
   "include": [
@@ -15,6 +15,11 @@
     "poc/sdk-vue2-init/src",
     "poc/sdk-vue2-init/test",
     "poc/sdk-vue3-init/src",
-    "poc/sdk-vue3-init/test"
+    "poc/sdk-vue3-init/test",
+    "sdk-web/src",
+    "sdk-web/test/dist-loads.spec.ts",
+    "sdk-web/test/core.spec.ts",
+    "sdk-web/test/vue2-host",
+    "sdk-web/test/vue3-host"
   ]
 }

@@ -3,10 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "nl-observe 单仓根：聚合前端工程（npm workspaces），供 scripts/quality-gate.sh --scope frontend/all 在仓库根执行",
+  "description": "nl-observe 单仓根：聚合前端工程（npm workspaces），供 scripts/quality-gate.sh --scope frontend/all 在仓库根执行。注：sdk-web/test/vue2-host、vue3-host 为独立 npm 工程（非 workspace 成员）——npm 11.20 实测对「workspace 目录内嵌套 workspace」不落地嵌套 node_modules，vue2/vue3 双版本无法正确共存；宿主在各自目录 npm ci 安装，根 vitest projects 仍聚合其用例，质量门口径不变。",
   "workspaces": [
     "poc/sdk-vue2-init",
-    "poc/sdk-vue3-init"
+    "poc/sdk-vue3-init",
+    "sdk-web"
   ],
   "scripts": {
     "lint": "eslint .",
