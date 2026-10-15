@@ -26,6 +26,7 @@ class AttributeKeysTest {
         assertEquals("biz.total_suspended_ms", AttributeKeys.BIZ_TOTAL_SUSPENDED_MS);
         assertEquals("biz.effective_duration_ms", AttributeKeys.BIZ_EFFECTIVE_DURATION_MS);
         assertEquals("biz.code", AttributeKeys.BIZ_CODE);
+        assertEquals("biz.trace_id", AttributeKeys.BIZ_TRACE_ID);
         assertEquals("biz.suspend_start", AttributeKeys.EVENT_BIZ_SUSPEND_START);
         assertEquals("biz.resume", AttributeKeys.EVENT_BIZ_RESUME);
         assertEquals("biz.business.", AttributeKeys.BIZ_BUSINESS_NAME_PREFIX);

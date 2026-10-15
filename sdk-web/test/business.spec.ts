@@ -14,6 +14,7 @@
  * events/attributes 实时可读）断言未结束（挂起中）span 的 event 与 ended 状态。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { type Attributes } from '@opentelemetry/api';
 import { type ReadableSpan, type Span, type SpanProcessor } from '@opentelemetry/sdk-trace-base';
 import {
   AggregationTemporality,
@@ -21,7 +22,6 @@ import {
   InMemoryMetricExporter,
   PeriodicExportingMetricReader,
   type DataPoint,
-  type MetricData,
 } from '@opentelemetry/sdk-metrics';
 import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { NlObserveClient } from '../src/core/client';
@@ -64,8 +64,9 @@ function makeClient(opts: { clock?: () => number; withMetrics?: boolean } = {}):
   let reader: PeriodicExportingMetricReader | undefined;
   let metricsExporter: InMemoryMetricExporter | undefined;
   if (opts.withMetrics) {
-    // 同步 Gauge 仅支持 cumulative 时序（OTel 指标语义规范）
-    metricsExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    // Counter 支持 DELTA（同步 Gauge 不支持）：DELTA 只导出新增、不重发已导出时序
+    // ——钉住 Major-1 的 cumulative 重发问题（见 BusinessManager 头注释）
+    metricsExporter = new InMemoryMetricExporter(AggregationTemporality.DELTA);
     reader = new PeriodicExportingMetricReader({
       exporter: metricsExporter,
       exportIntervalMillis: 3_600_000,
@@ -193,36 +194,118 @@ describe('T13 成败口径（endBusiness 唯一依据）', () => {
   });
 });
 
-describe('T13 nl.business_duration data point', () => {
-  it('end 发 nl.business_duration data point：value=有效耗时，attributes 含 biz.code/biz.status/biz.end_reason', async () => {
+/** 收集 nl.business_duration 的全部 data point（断言 sum 形态，钉 Major-1 契约）。 */
+function collectBusinessDurationDps(
+  exporter: InMemoryMetricExporter,
+): Array<{ value: number; attributes: Attributes }> {
+  const out: Array<{ value: number; attributes: Attributes }> = [];
+  for (const rm of exporter.getMetrics()) {
+    for (const sm of rm.scopeMetrics) {
+      for (const m of sm.metrics) {
+        if (m.descriptor.name !== METRIC_BUSINESS_DURATION) continue;
+        expect(m.dataPointType).toBe(DataPointType.SUM); // sum 形态（跨层契约 OtlpMetricPayload）
+        for (const dp of m.dataPoints as DataPoint<number>[]) {
+          out.push({ value: dp.value, attributes: dp.attributes });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+describe('T13 nl.business_duration data point（sum 形态 + 每业务唯一时序，Major-1 回归）', () => {
+  it('end 发 sum data point：value=有效耗时，attributes 含 biz.code/status/end_reason/trace_id；' +
+    '同 bizCode 两业务不折叠；DELTA 下不跨周期重发', async () => {
     let t = 0;
     const { client, reader, metricsExporter } = makeClient({ clock: () => t, withMetrics: true });
     client.signIn('C-1');
     client.startBusiness('ORDER');
     t += 420;
     client.endBusiness('ORDER', { status: 'success' });
+    await reader!.forceFlush(); // 周期读取器：forceFlush 触发 collect + export
 
-    await reader!.forceFlush(); // 周期读取器：forceFlush 触发 collect + export 到 InMemory 导出器
-    const resourceMetrics = metricsExporter!.getMetrics();
-    let metric: MetricData | undefined;
-    for (const rm of resourceMetrics) {
-      for (const sm of rm.scopeMetrics) {
-        for (const m of sm.metrics) {
-          if (m.descriptor.name === METRIC_BUSINESS_DURATION) {
-            metric = m;
-          }
-        }
-      }
-    }
-    expect(metric).toBeDefined();
-    expect(metric!.dataPointType).toBe(DataPointType.GAUGE);
-    expect(metric!.dataPoints.length).toBe(1);
-    const dp = metric!.dataPoints[0] as DataPoint<number>;
-    expect(dp.value).toBe(420);
-    expect(dp.attributes).toEqual({
-      'biz.code': 'ORDER',
-      'biz.status': 'success',
-      'biz.end_reason': 'explicit',
-    });
+    // 同 bizCode 第二业务：traceId 不同 → 独立时序，不得被聚合折叠（旧 Gauge 实现会静默丢失）
+    client.startBusiness('ORDER');
+    t += 100;
+    client.endBusiness('ORDER', { status: 'fail' });
+    await reader!.forceFlush();
+
+    const dps = collectBusinessDurationDps(metricsExporter!);
+    expect(dps.length).toBe(2);
+    expect(dps.every((dp) => dp.attributes['biz.code'] === 'ORDER')).toBe(true);
+    expect(new Set(dps.map((dp) => dp.attributes['biz.trace_id'])).size).toBe(2); // 每业务唯一时序键
+    expect(dps[0].value).toBe(420);
+    expect(dps[0].attributes['biz.status']).toBe('success');
+    expect(dps[0].attributes['biz.end_reason']).toBe('explicit');
+    expect(dps[1].value).toBe(100);
+    expect(dps[1].attributes['biz.status']).toBe('fail');
+
+    // DELTA：无新增的下一周期不重发（cumulative 会每周期重发已导出时序 →
+    // 后端 append 表 otel_metrics 产生重复行）
+    await reader!.forceFlush();
+    expect(collectBusinessDurationDps(metricsExporter!).length).toBe(2);
+  });
+});
+
+describe('T13 单一 ACTIVE 不变量（Major-2 回归）', () => {
+  it('start(A)→start(B)→resume(A)：A 恢复 ACTIVE，B 被自动挂起，不出现双 ACTIVE', () => {
+    const { client, cap } = makeClient();
+    client.signIn('C-1');
+    client.startBusiness('A');
+    client.startBusiness('B'); // A 被挂起（第 1 个 suspend_start）
+    client.resumeBusiness('A'); // A 恢复 → B 必须自动挂起
+
+    const a = cap.started.get('biz.business.A')!;
+    const b = cap.started.get('biz.business.B')!;
+    expect(eventNames(a)).toContain('biz.resume');
+    expect(a.ended).toBe(false);
+    // B 由 ACTIVE 转 SUSPENDED：新增 1 个 suspend_start event（B 此前未挂起），span 仍未结束
+    expect(eventNames(b).filter((n) => n === 'biz.suspend_start')).toHaveLength(1);
+    expect(b.ended).toBe(false);
+    // A：挂起 1 次 + 恢复 1 次
+    expect(eventNames(a).filter((n) => n === 'biz.suspend_start')).toHaveLength(1);
+  });
+});
+
+describe('T13 边界语义（评审 m4 测试缺口补齐）', () => {
+  it('挂起中结束：total_suspended_ms 补记至 end 时刻，effective = 墙钟-Σ挂起', () => {
+    let t = 1_000_000;
+    const { client, spans } = makeClient({ clock: () => t });
+    client.signIn('C-1');
+    client.startBusiness('A');
+    t += 300;
+    client.suspendBusiness('A');
+    t += 200;
+    client.endBusiness('A', { status: 'success' }); // 挂起态直接 end
+
+    const finished = spans.getFinishedSpans().find((s) => s.name === 'biz.business.A');
+    expect(finished).toBeDefined();
+    expect(finished!.attributes['biz.total_suspended_ms']).toBe(200);
+    expect(finished!.attributes['biz.effective_duration_ms']).toBe(300); // 500 - 200
+    expect(finished!.attributes['biz.status']).toBe('success');
+  });
+
+  it('未知 key：end/suspend/resume 均 warn+no-op；重复 end 只生效一次', () => {
+    const { client, spans } = makeClient();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    client.signIn('C-1');
+    client.startBusiness('A');
+    client.endBusiness('NOPE');
+    client.suspendBusiness('NOPE');
+    client.resumeBusiness('NOPE');
+    expect(warn.mock.calls.length).toBe(3);
+    client.endBusiness('A', { status: 'success' });
+    client.endBusiness('A', { status: 'fail' }); // 重复 end no-op
+    expect(spans.getFinishedSpans().filter((s) => s.name === 'biz.business.A')).toHaveLength(1);
+  });
+
+  it('bizCode 违反约束（含非法字符/超长）→ warn+no-op，不产生 span', () => {
+    const { client, cap } = makeClient();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    client.signIn('C-1');
+    client.startBusiness('order-2026-10-15-9f3k9x!'); // 含集合外字符（防高基数订单号当 bizCode）
+    client.startBusiness('A'.repeat(65)); // 超 64 长度上限
+    expect(warn.mock.calls.length).toBe(2);
+    expect(cap.started.size).toBe(0);
   });
 });

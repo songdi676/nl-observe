@@ -29,6 +29,9 @@ public final class AttributeKeys {
     public static final String BIZ_EFFECTIVE_DURATION_MS = "biz.effective_duration_ms";
     /** 业务编码（指标 data point 属性） */
     public static final String BIZ_CODE = "biz.code";
+    /** 业务 root span traceId（nl.business_duration data point 属性：每业务唯一时序键，
+     *  防同 (biz.code,status,end_reason) 多业务在 sum 聚合内折叠；T13 评审 Major-1） */
+    public static final String BIZ_TRACE_ID = "biz.trace_id";
     /** span event：挂起起点 */
     public static final String EVENT_BIZ_SUSPEND_START = "biz.suspend_start";
     /** span event：恢复 */

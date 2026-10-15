@@ -8,5 +8,17 @@ export type { NlObserveOptions, ResolvedOptions } from './core/client';
 export type { NlObserveGuardEntry } from './core/guard';
 export { SigninManager } from './core/SigninManager';
 export type { SigninState } from './core/SigninManager';
-export { BusinessManager } from './core/BusinessManager';
-export type { BizEndReason, BizStatus, BusinessState } from './core/BusinessManager';
+export {
+  BIZ_BUSINESS_NAME_PREFIX,
+  ATTR_BIZ_CODE,
+  ATTR_BIZ_STATUS,
+  ATTR_BIZ_END_REASON,
+  ATTR_BIZ_TOTAL_SUSPENDED_MS,
+  ATTR_BIZ_EFFECTIVE_DURATION_MS,
+  ATTR_BIZ_TRACE_ID,
+  EVENT_BIZ_SUSPEND_START,
+  EVENT_BIZ_RESUME,
+  METRIC_BUSINESS_DURATION,
+  BusinessManager,
+} from './core/BusinessManager';
+export type { BizEndReason, BizStatus, BusinessState, BusinessDurationAttrs } from './core/BusinessManager';

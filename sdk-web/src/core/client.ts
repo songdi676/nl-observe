@@ -102,11 +102,15 @@ export class NlObserveClient {
       resource,
       readers: options.metricReaders ?? [],
     });
-    const businessDurationGauge = this.meterProvider
+    // nl.business_duration 用 Counter（sum 形态）：跨层契约 backend OtlpMetricPayload
+    // "sum 形态（nl.business_duration / nl.sdk.flush）"；同步 Gauge 按属性集 last-value-wins
+    // 会致同码业务折叠 + cumulative 重发重复行（T13 评审 Major-1）。
+    // data point 属性含 biz.trace_id（每业务唯一时序键）；T15/T17 接线导出时用 DELTA。
+    const businessDurationCounter = this.meterProvider
       .getMeter('nl-observe-sdk-web', SDK_VERSION)
-      .createGauge(METRIC_BUSINESS_DURATION, {
+      .createCounter(METRIC_BUSINESS_DURATION, {
         unit: 'ms',
-        description: '业务有效耗时（ms）= 墙钟 - Σ挂起，每业务一个 data point',
+        description: '业务有效耗时（ms）= 墙钟 - Σ挂起，每业务一个 data point（sum 形态）',
       });
 
     this.business = new BusinessManager({
@@ -114,7 +118,7 @@ export class NlObserveClient {
       isSignedIn: () => this.signin.isSignedIn(),
       getCustomerId: () => this.resolvedOptions.customerId,
       now: options.clock,
-      emitBusinessDuration: (valueMs, attrs) => businessDurationGauge.record(valueMs, attrs),
+      emitBusinessDuration: (valueMs, attrs) => businessDurationCounter.add(valueMs, attrs),
     });
     this.isInitialized = true;
   }
@@ -133,9 +137,14 @@ export class NlObserveClient {
 
   // ---- 门面方法（T13 语义：未 init no-op+warn；签入互斥与业务状态机见 SigninManager/BusinessManager） ----
 
-  /** 签入（互斥：已签入再签入先隐式 sign_out 并 warn）；更新 customerId。 */
+  /** 签入（互斥：已签入再签入先隐式 sign_out 并 warn）；更新 customerId。
+   *  customerId 长度上限 128（安全评审 F2：防超长串放大 OTLP 载荷）。 */
   signIn(customerId: string): void {
     if (!this.guard('signIn')) return;
+    if (customerId.length > 128) {
+      console.warn('[nl-observe] signIn: customerId too long (max 128); no-op');
+      return;
+    }
     this.signin.signIn();
     this.resolvedOptions = { ...this.resolvedOptions, customerId };
   }
@@ -172,12 +181,13 @@ export class NlObserveClient {
   }
 
   /**
-   * 结束业务：status 为成败唯一依据（success|fail），endReason 缺省 explicit
-   * （unmount 未显式结束由适配层传 endReason:'unmount'，计 fail）。
+   * 结束业务：status 为成败唯一依据（success|fail），缺省 fail
+   * （"未显式结束计 fail" 缺省路径在 BusinessManager.end，评审 n2：缺省只留一处）；
+   * endReason 缺省 explicit，unmount 未显式结束由适配层传 endReason:'unmount'。
    */
   endBusiness(
     bizId: string,
-    options: { status: BizStatus; endReason?: BizEndReason } = { status: 'fail' },
+    options: { status?: BizStatus; endReason?: BizEndReason } = {},
   ): void {
     if (!this.guard('endBusiness')) return;
     this.business?.end(bizId, options);

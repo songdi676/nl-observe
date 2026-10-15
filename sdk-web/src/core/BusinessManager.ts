@@ -9,8 +9,14 @@
  * - end：写 attributes biz.total_suspended_ms / biz.effective_duration_ms（=墙钟-Σ挂起）/
  *   biz.status / biz.end_reason（explicit|unmount），end span，发 nl.business_duration data point。
  *
- * 属性/事件/指标键与 backend-observe-common AttributeKeys 一一对应（单一事实来源，T03 已定）；
- * biz_code/biz_status/end_reason 为指标 data point 属性（DDL 列名 snake_case，属性键沿用常量点号名）。
+ * 属性/事件/指标键与 backend-observe-common AttributeKeys 手工镜像（T03 已定；
+ * 两侧改动必须同步，见 AttributeKeysTest 与 sdk-web 常量一致性）。
+ * nl.business_duration 为 **sum 形态**（跨层契约：backend OtlpMetricPayload 明确
+ * "sum 形态（nl.business_duration / nl.sdk.flush）"，T13 评审 Major-1）：
+ * SDK 侧用 Counter 上报，data point 属性含 biz.trace_id（每业务唯一时序键），
+ * 防同 (biz.code,status,end_reason) 的多业务在聚合内折叠。
+ * 注意：T15/T17 接线 OTLP 指标导出时应选 DELTA 采集周期，避免 cumulative 每周期重发
+ * 已导出时序导致 append 表（otel_metrics）重复行。
  */
 import { ROOT_CONTEXT, type Span, type Tracer } from '@opentelemetry/api';
 
@@ -36,13 +42,21 @@ export const EVENT_BIZ_SUSPEND_START = 'biz.suspend_start';
 export const EVENT_BIZ_RESUME = 'biz.resume';
 /** 指标：业务有效耗时（ms，每业务一个 data point；AttributeKeys.NL_BUSINESS_DURATION） */
 export const METRIC_BUSINESS_DURATION = 'nl.business_duration';
+/** 指标 data point 属性：业务 root span traceId（每业务唯一时序键；AttributeKeys.BIZ_TRACE_ID） */
+export const ATTR_BIZ_TRACE_ID = 'biz.trace_id';
 
-/** 指标 data point 属性集（设计 §7：biz_code/biz_status/end_reason，属性键用点号常量）。 */
+/** 指标 data point 属性集（设计 §7 + T13 评审 Major-1：加 biz.trace_id 防同码业务折叠）。 */
 export type BusinessDurationAttrs = {
   [ATTR_BIZ_CODE]: string;
   [ATTR_BIZ_STATUS]: BizStatus;
   [ATTR_BIZ_END_REASON]: BizEndReason;
+  [ATTR_BIZ_TRACE_ID]: string;
 };
+
+/** bizCode 输入约束（安全评审 F2：防高基数/超长串放大指标时序与 OTLP 载荷；低基数业务编码） */
+export const BIZ_CODE_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
+/** 并发未结束业务实例上限（安全评审 F1：宿主缺陷循环反复 startBusiness 的 DoS 面设限） */
+export const MAX_CONCURRENT_INSTANCES = 128;
 
 export interface BusinessManagerDeps {
   tracer: Tracer;
@@ -74,15 +88,21 @@ export class BusinessManager {
     return this.deps.now ? this.deps.now() : Date.now();
   }
 
-  /** 按 key 查实例：bizId 精确匹配优先，否则取同 bizCode 最近一个未 ENDED 实例。 */
+  /** 按 key 查实例：bizId 精确匹配优先，否则取同 bizCode 最近一个未结束实例。
+   *  同 bizCode 多实例时 warn 提示应传 bizId（评审 m1：避免静默命中非预期实例）。 */
   findByKey(key: string): BizInstance | undefined {
     const byId = this.instances.get(key);
     if (byId) return byId;
     let latest: BizInstance | undefined;
+    let matches = 0;
     for (const inst of this.instances.values()) {
       if (inst.bizCode === key && inst.state !== 'ENDED') {
+        matches += 1;
         if (!latest || inst.startMs >= latest.startMs) latest = inst;
       }
+    }
+    if (matches > 1) {
+      console.warn(`[nl-observe] multiple non-ended instances for bizCode "${key}"; pass bizId`);
     }
     return latest;
   }
@@ -100,6 +120,14 @@ export class BusinessManager {
   start(bizCode: string): string | undefined {
     if (!this.deps.isSignedIn()) {
       console.warn('[nl-observe] startBusiness called while signed out; no-op');
+      return undefined;
+    }
+    if (!BIZ_CODE_PATTERN.test(bizCode)) {
+      console.warn('[nl-observe] startBusiness: bizCode must match ' + BIZ_CODE_PATTERN + '; no-op');
+      return undefined;
+    }
+    if (this.instances.size >= MAX_CONCURRENT_INSTANCES) {
+      console.warn('[nl-observe] startBusiness: concurrent business limit reached; no-op');
       return undefined;
     }
     const now = this.now();
@@ -160,7 +188,9 @@ export class BusinessManager {
     inst.span.addEvent(EVENT_BIZ_SUSPEND_START);
   }
 
-  /** 恢复业务：累计挂起时长并记 biz.resume event（span 不结束）。 */
+  /** 恢复业务：累计挂起时长并记 biz.resume event（span 不结束）。
+   *  维持"至多一个 ACTIVE"不变量（评审 Major-2：否则 resume 后双 ACTIVE，
+   *  T14 "parent=当前 ACTIVE 业务" 取父规则破洞）：恢复前先把其他 ACTIVE 挂起。 */
   resume(key: string): void {
     const inst = this.findByKey(key);
     if (!inst || inst.state !== 'SUSPENDED') {
@@ -168,6 +198,13 @@ export class BusinessManager {
       return;
     }
     const now = this.now();
+    for (const other of this.instances.values()) {
+      if (other !== inst && other.state === 'ACTIVE') {
+        other.state = 'SUSPENDED';
+        other.suspendStartMs = now;
+        other.span.addEvent(EVENT_BIZ_SUSPEND_START);
+      }
+    }
     inst.suspendedMs += now - (inst.suspendStartMs ?? now);
     inst.suspendStartMs = undefined;
     inst.state = 'ACTIVE';
@@ -196,7 +233,12 @@ export class BusinessManager {
     }
     const status: BizStatus = options.status ?? 'fail';
     const endReason: BizEndReason = options.endReason ?? 'explicit';
-    const effectiveMs = now - inst.startMs - suspended;
+    // 时钟回退/NTP 校时可致负值：落 0 并 warn（评审 Minor：负值不得写入属性与指标）
+    const rawMs = now - inst.startMs - suspended;
+    const effectiveMs = rawMs < 0 ? 0 : rawMs;
+    if (rawMs < 0) {
+      console.warn(`[nl-observe] endBusiness: negative effective duration for "${key}"; clamped to 0`);
+    }
     inst.span.setAttribute(ATTR_BIZ_TOTAL_SUSPENDED_MS, suspended);
     inst.span.setAttribute(ATTR_BIZ_EFFECTIVE_DURATION_MS, effectiveMs);
     inst.span.setAttribute(ATTR_BIZ_STATUS, status);
@@ -207,6 +249,10 @@ export class BusinessManager {
       [ATTR_BIZ_CODE]: inst.bizCode,
       [ATTR_BIZ_STATUS]: status,
       [ATTR_BIZ_END_REASON]: endReason,
+      [ATTR_BIZ_TRACE_ID]: inst.span.spanContext().traceId,
     });
+    // ENDED 实例移出表（评审 Minor/安全 F1：长会话 SPA 防 Map 与 Span 引用慢性泄漏；
+    // 二次 end 落入上方 unknown business warn 分支，语义不变）
+    this.instances.delete(inst.bizId);
   }
 }

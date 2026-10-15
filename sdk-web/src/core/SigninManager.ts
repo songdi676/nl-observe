@@ -10,11 +10,12 @@ export type SigninState = 'SIGNED_OUT' | 'SIGNED_IN';
 export class SigninManager {
   private state: SigninState = 'SIGNED_OUT';
 
-  /** 签入；已签入时先隐式 sign_out 并 warn（详设 §6.1 互斥语义）。 */
+  /** 签入；已签入时先隐式 sign_out 并 warn（详设 §6.1 互斥语义；
+   *  走 signOut() 而非直接改状态，未来 signOut 增副作用不会绕过——评审 n1）。 */
   signIn(): void {
     if (this.state === 'SIGNED_IN') {
       console.warn('[nl-observe] sign_in called while already signed in; implicit sign_out first');
-      this.state = 'SIGNED_OUT';
+      this.signOut();
     }
     this.state = 'SIGNED_IN';
   }
