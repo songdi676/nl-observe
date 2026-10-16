@@ -66,7 +66,7 @@ describe('T17 init 配置：endpoint / exportTimeoutMs / restPathFilter', () => 
     expect(calls).toContain(OTLP_TRACES);
   });
 
-  it('restPathFilter：仅命中过滤器的 URL 产生 REST span（query 已去；OTLP 端点自排除仍生效）', async () => {
+  it('restPathFilter：仅命中过滤器的 URL 产生 REST span（query 已去；自排除见下一用例）', async () => {
     const { fn } = rejectingFetch();
     vi.stubGlobal('fetch', fn);
     const exporter = new InMemorySpanExporter();
@@ -113,6 +113,108 @@ describe('T17 init 配置：endpoint / exportTimeoutMs / restPathFilter', () => 
     const traceIds = roots.map((s) => s.spanContext().traceId);
     expect(new Set(traceIds).size).toBe(2);
     await c.shutdown();
+  });
+
+  it('restPathFilter 抛错：业务请求原样放行（fail-closed 不埋点，不击穿业务，安全 F-1）', async () => {
+    const { fn } = rejectingFetch();
+    vi.stubGlobal('fetch', fn);
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const exporter = new InMemorySpanExporter();
+    const c = new NlObserveClient();
+    c.init({
+      serviceName: 's',
+      customerId: 'C-1',
+      endpoint: OTLP_TRACES,
+      batchTimeoutMs: 60000,
+      restPathFilter: () => {
+        throw new Error('host filter bug');
+      },
+      spanProcessors: [new SimpleSpanProcessor(exporter)],
+    });
+    c.signIn('C-1');
+    const bizId = c.startBusiness('ORDER')!;
+    // 过滤器抛错不得使业务 fetch 同步抛出：请求按原样转发（stub 下即 ECONNREFUSED）
+    await expect(fetch('http://svc.local/api/orders')).rejects.toThrow('ECONNREFUSED');
+    const restSpans = exporter.getFinishedSpans().filter((s: ReadableSpan) => s.name === 'HTTP GET');
+    expect(restSpans).toHaveLength(0); // fail-closed：抛错 = 不埋点
+    expect(debug.mock.calls.some((a) => String(a[0]).includes('restPathFilter'))).toBe(true);
+    c.endBusiness(bizId, { status: 'success' });
+    await c.shutdown();
+  });
+
+  it('OTLP 自排除同时覆盖 traces 与 metrics 端点（fetch 回退路径不自埋点，arch M-2）', async () => {
+    const { fn } = rejectingFetch();
+    vi.stubGlobal('fetch', fn);
+    const exporter = new InMemorySpanExporter();
+    const c = new NlObserveClient();
+    c.init({
+      serviceName: 's',
+      customerId: 'C-1',
+      endpoint: OTLP_TRACES,
+      batchTimeoutMs: 60000,
+      spanProcessors: [new SimpleSpanProcessor(exporter)],
+    });
+    c.signIn('C-1');
+    const bizId = c.startBusiness('ORDER')!;
+    await fetch(OTLP_METRICS).catch(() => undefined); // SDK 自身 metrics 端点（fetch 回退环境）
+    await fetch(OTLP_TRACES).catch(() => undefined); // SDK 自身 traces 端点
+    await fetch('http://svc.local/api/orders').catch(() => undefined); // 对照组：业务 URL 照常埋点
+    const restSpans = exporter.getFinishedSpans().filter((s: ReadableSpan) => s.name === 'HTTP GET');
+    expect(restSpans).toHaveLength(1);
+    expect(restSpans[0].attributes['http.route']).toBe('/api/orders');
+    c.endBusiness(bizId, { status: 'success' });
+    await c.shutdown();
+  });
+
+  it('带 query 的 endpoint：metrics 派生保留 query；降级日志只留 origin+path（安全 F-3/F-4）', async () => {
+    const { calls, fn } = rejectingFetch();
+    vi.stubGlobal('fetch', fn);
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const tracesUrl = 'http://127.0.0.1:4318/v1/traces?apiKey=secret-key';
+    const c = new NlObserveClient();
+    c.init({
+      serviceName: 's',
+      customerId: 'C-1',
+      endpoint: tracesUrl,
+      batchTimeoutMs: 60000,
+      instrumentRest: false,
+    });
+    c.signIn('C-1');
+    const bizId = c.startBusiness('ORDER')!;
+    c.endBusiness(bizId, { status: 'success' });
+    await c.shutdown();
+    // F-4：旧字符串拼接会派生坏 URL（…?apiKey=…/v1/metrics）→ metrics 通道永久失效；
+    // 新实现按 URL 解析替换 path 末段，query 原样保留
+    expect(calls).toContain('http://127.0.0.1:4318/v1/metrics?apiKey=secret-key');
+    // F-3：降级日志第二参为 safe URL——query 中的凭据不得落 console.debug
+    const degraded = debug.mock.calls.find((a) => String(a[0]).includes('degraded'));
+    expect(degraded).toBeDefined();
+    expect(String(degraded![1])).toBe('http://127.0.0.1:4318/v1/traces');
+  });
+
+  it('非 https 端点（非 localhost）init 告警；localhost/127.0.0.1 豁免（安全 F-2）', async () => {
+    const { fn } = rejectingFetch();
+    vi.stubGlobal('fetch', fn);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const c = new NlObserveClient();
+    c.init({
+      serviceName: 's',
+      endpoint: 'http://collector.example.com/v1/traces',
+      batchTimeoutMs: 60000,
+      instrumentRest: false,
+    });
+    expect(warn.mock.calls.some((a) => String(a[0]).includes('not https'))).toBe(true);
+    await c.shutdown();
+    warn.mockClear();
+    const c2 = new NlObserveClient();
+    c2.init({
+      serviceName: 's',
+      endpoint: 'http://127.0.0.1:4318/v1/traces',
+      batchTimeoutMs: 60000,
+      instrumentRest: false,
+    });
+    expect(warn).not.toHaveBeenCalled();
+    await c2.shutdown();
   });
 
   it('exportTimeoutMs 缺省 5000ms（DEFAULT_EXPORT_TIMEOUT_MS）', () => {

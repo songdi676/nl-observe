@@ -67,8 +67,24 @@ import {
   type RestRecorderDeps,
 } from './rest/autoprofile';
 
-/** T17 restPathFilter：REST 自动埋点 URL 白名单谓词（原始 URL 口径）。 */
+/**
+ * T17 restPathFilter：REST 自动埋点 URL 白名单谓词。
+ * 注意（安全 F-5）：入参是**原始 URL**——宿主代码通常是绝对形态
+ * （如 `https://api.example.com/orders/123?token=…`），不是规范化 route
+ * （去 origin/query 后的 `/orders/123`）。请写形态无关的判定：
+ * `new URL(url).hostname === 'api.example.com'` 或 `new URL(url).pathname.startsWith('/api/')`；
+ * 裸写 `url.startsWith('/api/')` 对绝对 URL 会**静默失效**（全部放行）。
+ */
 export type RestPathFilter = (url: string) => boolean;
+
+/** 安全 F-2：localhost/127.0.0.1/[::1] 豁免非 https 告警（本地接收端是常规部署形态）。 */
+function isLocalhostUrl(url: string): boolean {
+  try {
+    return ['localhost', '127.0.0.1', '::1'].includes(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
 
 export interface NlObserveOptions {
   serviceName?: string;
@@ -144,6 +160,21 @@ export class NlObserveClient {
     }
     // T17：endpoint 为规范配置名，otlpUrl 为向后兼容别名（同传 endpoint 优先）
     const endpoint = options.endpoint ?? options.otlpUrl;
+    if (endpoint && !isLocalhostUrl(endpoint)) {
+      try {
+        const proto = new URL(endpoint).protocol;
+        if (proto !== 'https:') {
+          // 安全 F-2：OTLP 载荷含 nl.customer_id（客户标识）+ 业务码 + 路由——
+          // 非 https 即明文外发（T06 的 CIDR 白名单是网络层防护，不等于链路加密）。
+          // 只告警不拒配：本地/内网 http 接收端是常规开发形态。
+          console.warn(
+            '[nl-observe] OTLP endpoint scheme is not https: telemetry (incl. customer id) is sent in plaintext; production endpoints must use https',
+          );
+        }
+      } catch {
+        // endpoint 不可解析：不告警，维持原行为（导出会失败并静默降级）
+      }
+    }
     this.resolvedOptions = {
       serviceName: options.serviceName ?? 'unknown-service',
       customerId: options.customerId ?? '',
@@ -264,8 +295,14 @@ export class NlObserveClient {
       getTracer: () => this.tracer,
       getActiveRootSpan: () => this.business?.activeRootSpan(),
       now: options.clock,
+      // arch M-2：自排除须同时覆盖 traces 与 metrics 两个端点——fetch 回退环境（node、
+      // 无 sendBeacon+Blob 的浏览器）SDK 自身周期 metrics 导出走被包装的全局 fetch，
+      // 仅排 traces 前缀会「自埋点」出 `HTTP POST /v1/metrics` REST span。
       isExcludedUrl: this.resolvedOptions.endpoint
-        ? (url: string) => url.startsWith(this.resolvedOptions.endpoint as string)
+        ? (url: string) => {
+            const ep = this.resolvedOptions.endpoint as string;
+            return url.startsWith(ep) || url.startsWith(metricsUrlFromTracesUrl(ep));
+          }
         : undefined,
       // T17 restPathFilter：自动埋点 URL 白名单（缺省全放行；trackRest 不受限）
       restPathFilter: options.restPathFilter,

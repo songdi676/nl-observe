@@ -89,9 +89,12 @@ it('T17 e2e（vue2）：init→signIn→v-biz→fetch→end → root span + REST
   const biz2 = client.startBusiness('PAY')!;
   client.endBusiness(biz2, { status: 'success' });
   await settle();
-  const roots = finished
-    .concat(spanExporter.getFinishedSpans())
+  // 与 vue3 宿主同构（nit-6）：重新取快照并断言数量——旧快照 concat 新快照会重复计数，
+  // 此前仅靠 Set(traceId) 去重侥幸通过且永远无法断言数量
+  const roots = spanExporter
+    .getFinishedSpans()
     .filter((s: ReadableSpan) => s.name.startsWith('biz.business.'));
+  expect(roots).toHaveLength(2);
   expect(new Set(roots.map((s) => s.spanContext().traceId)).size).toBe(2);
 
   wrapper.destroy(); // VTU v1（vue2 宿主）无 unmount，destroy 即卸载（触发 unbind 钩子）

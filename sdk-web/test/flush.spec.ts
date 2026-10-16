@@ -52,6 +52,7 @@ import {
   SendBeaconSpanExporter,
   createOtlpHttpBeaconTransport,
   metricsUrlFromTracesUrl,
+  safeUrlForLog,
   setupFlushHook,
 } from '../src/core/flush';
 
@@ -463,6 +464,18 @@ describe('T15 sendBeacon transport（OTLP/HTTP JSON 文本口径）', () => {
     expect(metricsUrlFromTracesUrl('http://h:4318/v1/traces')).toBe('http://h:4318/v1/metrics');
     expect(metricsUrlFromTracesUrl('http://h:4318/v1/traces/')).toBe('http://h:4318/v1/metrics');
     expect(metricsUrlFromTracesUrl('http://h:4318')).toBe('http://h:4318/v1/metrics');
+    // 安全 F-4：带 query 的 endpoint 按 URL 解析派生——query 保留、path 正确替换
+    // （旧字符串拼接会产出坏 URL `…?key=K/v1/metrics` → metrics 通道静默永久失效）
+    expect(metricsUrlFromTracesUrl('http://h:4318/v1/traces?key=K')).toBe('http://h:4318/v1/metrics?key=K');
+    expect(metricsUrlFromTracesUrl('http://h:4318/base')).toBe('http://h:4318/base/v1/metrics');
+    // 相对 URL（new URL 抛错）：保留字符串拼接语义
+    expect(metricsUrlFromTracesUrl('/v1/traces')).toBe('/v1/metrics');
+  });
+
+  it('safeUrlForLog：剥离 query/userinfo/hash——失败日志不泄漏 URL 内嵌凭据（安全 F-3）', () => {
+    expect(safeUrlForLog('https://user:pass@h:4318/v1/traces?k=K#frag')).toBe('https://h:4318/v1/traces');
+    expect(safeUrlForLog('http://h:4318/v1/traces?key=K')).toBe('http://h:4318/v1/traces');
+    expect(safeUrlForLog('/v1/traces?k=K#f')).toBe('/v1/traces');
   });
 });
 
