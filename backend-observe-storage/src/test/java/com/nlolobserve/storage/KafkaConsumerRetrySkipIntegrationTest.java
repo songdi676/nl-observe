@@ -38,27 +38,30 @@ import static org.mockito.Mockito.verify;
  */
 @SpringBootTest(properties = {
         "observe.databend.url=jdbc:databend://127.0.0.1:8000/observe?presigned_url_disabled=true",
+        "observe.databend.check-on-startup=false",
         "spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer",
         "spring.kafka.producer.value-serializer=org.apache.kafka.common.serialization.StringSerializer"
 })
 class KafkaConsumerRetrySkipIntegrationTest {
 
     private static final String CONSUMER_GROUP = "nl-observe-storage";
+    private static final String DEFAULT_IMAGE_NAME = "apache/kafka:latest";
 
     private static KafkaContainer kafka;
 
     @BeforeAll
     static void startKafka() {
         assumeTrue(DockerClientFactory.instance().isDockerAvailable(), "Docker 不可用：跳过 Kafka 集成测试");
+        String imageName = envOr("NL_OBSERVE_KAFKA_IMAGE", DEFAULT_IMAGE_NAME);
         try {
-            kafka = new KafkaContainer(DockerImageName.parse("apache/kafka:latest"));
+            kafka = new KafkaContainer(DockerImageName.parse(imageName));
             kafka.start();
         } catch (Throwable t) {
             if (kafka != null) {
                 kafka.stop();
                 kafka = null;
             }
-            assumeTrue(false, "Kafka 镜像不可得：跳过（人工环境验证），原因: " + t);
+            assumeTrue(false, "Kafka 镜像 " + imageName + " 不可得：跳过（人工环境验证），原因: " + t);
         }
     }
 
@@ -123,5 +126,10 @@ class KafkaConsumerRetrySkipIntegrationTest {
             }
             return false;
         }
+    }
+
+    private static String envOr(String key, String fallback) {
+        String value = System.getenv(key);
+        return value == null || value.isBlank() ? fallback : value;
     }
 }

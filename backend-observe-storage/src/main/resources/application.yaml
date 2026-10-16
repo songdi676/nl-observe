@@ -1,4 +1,4 @@
-# T07 storage 骨架配置（详设 §5）：Kafka 消费端；Databend JDBC 数据源接入为 T08
+# T07/T08 storage 配置（详设 §5）：Kafka 消费端 + Databend JDBC 数据源/启动自检
 spring:
   application:
     name: backend-observe-storage
@@ -14,6 +14,8 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       # 单批上限对齐 T08 JDBC batch（500/批，详设 §1.3）
       max-poll-records: 500
+      # 批处理超时参数化（T08 评审 backport：observe.kafka.max-poll-interval-ms 单一事实来源）
+      max-poll-interval-ms: ${observe.kafka.max-poll-interval-ms}
     listener:
       # 批处理（验收 batch.listener=true）+ 手动提交（写成功才 ack）
       type: batch
@@ -21,11 +23,16 @@ spring:
 
 observe:
   databend:
+    # 凭证走环境变量（不落配置）；启动自检要求 url 含 presigned_url_disabled=true（NFR-04）
     url: ${DATABEND_URL:}
     username: ${DATABEND_USER:}
     password: ${DATABEND_PASSWORD:}
+    # 启动 SELECT 1 连接自检开关（集成测试置 false；presigned_url_disabled 校验不豁免）
+    check-on-startup: true
   kafka:
     consumer-group: nl-observe-storage
+    # 单批处理超时（ms）：Databend 故障时避免 broker 误判消费者死亡重分配分区
+    max-poll-interval-ms: 300000
 
 logging:
   level:

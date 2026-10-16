@@ -11,7 +11,9 @@ package com.nlolobserve.common.ddl;
  * - DateTime64(9) → TIMESTAMP（纳秒精度，语义等价）
  * - PARTITION BY toYYYYMMDD(...) → 移除（FUSE 无显式分区，聚簇承担局部性）
  * - 去重（原 ReplacingMergeTree 折叠语义）→ 写入侧 REPLACE INTO（T08），
- *   去重身份键 = 原 ORDER BY 键（列保持 NOT NULL，REPLACE INTO 键列不得为空）
+ *   去重身份键 = 原 ORDER BY 键（列保持 NOT NULL，REPLACE INTO 键列不得为空）；
+ *   方言实测（Databend v1.2.881，T08）：REPLACE INTO 必须显式 {@code ON (身份键)} 子句
+ *   （键 = CLUSTER BY 键），缺失 ON 子句解析失败（code=1005 expecting ON）
  * - TTL 90 天 → 移除：本版本 Databend 的 FUSE 引擎不接受 TTL 表选项（实测 code=1301），
  *   且其 TTL 语义为表级保留期而非行级过期——概要设计"90 天后自动删除"（假设，待澄清）
  *   无原生 DDL 支持，由存储侧定期清理任务承担（T08/运维范围）。
