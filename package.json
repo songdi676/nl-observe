@@ -7,6 +7,7 @@
   "workspaces": [
     "poc/sdk-vue2-init",
     "poc/sdk-vue3-init",
+    "poc/micro-app-capture",
     "sdk-web"
   ],
   "scripts": {

@@ -74,6 +74,11 @@ export default defineConfig({
           include: ['test/core.spec.ts', 'test/business.spec.ts', 'test/flush.spec.ts', 'test/rest.spec.ts', 'test/export.spec.ts'],
         },
       },
+      // T21 POC：micro-app 沙箱捕获率验证（workspace 成员）。经目录引用其自带
+      // vitest.config.ts（alias/setupFiles 随该配置生效）。rc.32 探针的品牌校验
+      // unhandled rejection 由探针文件内自捕获（process 级监听器换装），根聚合
+      // 无项目级容忍 flag——真实未处理异常仍会使套件变红（评审 sec M-1/arch m-1）。
+      './poc/micro-app-capture',
     ],
     coverage: {
       provider: 'v8',
