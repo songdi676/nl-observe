@@ -111,6 +111,15 @@ export class BusinessManager {
     return this.findByKey(key)?.state;
   }
 
+  /** 当前 ACTIVE 业务 root span（T14 REST span 取父；至多一个 ACTIVE 由 Major-2 不变量保证；
+   *  无 ACTIVE 业务返回 undefined → REST 埋点不上报）。 */
+  activeRootSpan(): Span | undefined {
+    for (const inst of this.instances.values()) {
+      if (inst.state === 'ACTIVE') return inst.span;
+    }
+    return undefined;
+  }
+
   /**
    * 起业务：独立 root span（ROOT_CONTEXT 保证不同业务不同 traceId）；
    * 自动挂起其他 ACTIVE 业务（biz.suspend_start，span 不结束）。

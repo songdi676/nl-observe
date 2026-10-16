@@ -5,6 +5,12 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['test/dist-loads.spec.ts', 'test/core.spec.ts', 'test/business.spec.ts', 'test/flush.spec.ts'],
+    include: [
+      'test/dist-loads.spec.ts',
+      'test/core.spec.ts',
+      'test/business.spec.ts',
+      'test/flush.spec.ts',
+      'test/rest.spec.ts',
+    ],
   },
 });
