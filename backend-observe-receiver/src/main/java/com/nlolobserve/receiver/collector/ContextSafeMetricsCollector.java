@@ -34,6 +34,12 @@ public class ContextSafeMetricsCollector extends MetricsCollector {
     }
 
     @Override
+    protected void checkBody(RoutingContext ctx) {
+        // T06：同 ContextSafeTracesCollector——体积上限在过滤器层（可配置），库硬编码 10MB 检查跳过
+        HttpBodyGuards.checkBodyOrNext(ctx);
+    }
+
+    @Override
     protected void publish(RoutingContext ctx, ExportMetricsServiceRequest request) {
         CompletableFuture
             .supplyAsync(() -> publish(request, "http", httpEncoding(ctx), getOtelContext(ctx)), vertxWorker)
