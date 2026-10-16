@@ -11,6 +11,7 @@ export default defineConfig({
       'test/business.spec.ts',
       'test/flush.spec.ts',
       'test/rest.spec.ts',
+      'test/export.spec.ts',
     ],
   },
 });

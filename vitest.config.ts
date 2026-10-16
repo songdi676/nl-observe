@@ -71,7 +71,7 @@ export default defineConfig({
           name: 'sdk-web-core',
           root: './sdk-web',
           environment: 'node',
-          include: ['test/core.spec.ts', 'test/business.spec.ts', 'test/flush.spec.ts', 'test/rest.spec.ts'],
+          include: ['test/core.spec.ts', 'test/business.spec.ts', 'test/flush.spec.ts', 'test/rest.spec.ts', 'test/export.spec.ts'],
         },
       },
     ],

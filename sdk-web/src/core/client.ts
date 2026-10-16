@@ -13,6 +13,10 @@
  * pagehide/visibilitychange=hidden → flush hook（尽力上报 nl.sdk.flush）；
  * nl.first_screen_load 每页一个 data point（LCP 优先，load 兜底）。
  * T16 落地：businessState/activeBusiness 供 vue 指令（v-biz unmount 兜底、v-span 取父）查询。
+ * T17 落地：init 配置规范面（endpoint/exportTimeoutMs/restPathFilter，otlpUrl 兼容别名）；
+ * OTLP/HTTP 导出接线闭环（WebTracerProvider + traces/metrics exporter，业务 root span
+ * 以 ROOT_CONTEXT 为父保证不同 traceId）；endpoint 不可达 → 静默降级（console.debug，
+ * 不抛错、不阻断业务办理，NFR-03）。
  */
 import type { Tracer } from '@opentelemetry/api';
 import { WebTracerProvider } from '@opentelemetry/sdk-trace-web';
@@ -25,6 +29,7 @@ import {
 } from '@opentelemetry/sdk-metrics';
 import { SDK_VERSION } from './version';
 import { getGuardedClient, setGuardedClient } from './guard';
+import { installSilentDiagnostics } from './degrade';
 import { SigninManager } from './SigninManager';
 import {
   BusinessManager,
@@ -62,11 +67,24 @@ import {
   type RestRecorderDeps,
 } from './rest/autoprofile';
 
+/** T17 restPathFilter：REST 自动埋点 URL 白名单谓词（原始 URL 口径）。 */
+export type RestPathFilter = (url: string) => boolean;
+
 export interface NlObserveOptions {
   serviceName?: string;
   customerId?: string;
-  /** OTLP/HTTP 接收端点（缺省不挂导出器——单测/离线形态，与 T01 POC 口径一致） */
+  /**
+   * T17：OTLP/HTTP 接收端点（traces 口径；metrics 端点按 /v1/metrics 派生）。
+   * 缺省不挂导出器——单测/离线形态，与 T01 POC 口径一致。
+   * `otlpUrl` 为向后兼容别名（T13-T16 宿主既有配置），两者同传时 endpoint 优先。
+   */
+  endpoint?: string;
+  /** 向后兼容别名：OTLP/HTTP 端点（新代码请用 endpoint） */
   otlpUrl?: string;
+  /** T17：OTLP/HTTP 导出请求超时（fetch 回退路径 AbortSignal；缺省 5000ms） */
+  exportTimeoutMs?: number;
+  /** T17：REST 自动埋点 URL 白名单（缺省=全部非排除 URL；trackRest 手动兜底不受限） */
+  restPathFilter?: RestPathFilter;
   /** BatchSpanProcessor scheduledDelayMillis；详设 §1.5 batchTimeout 默认 2000ms 可配 */
   batchTimeoutMs?: number;
   /** 页面卸载 forceFlush 超时（详设 §4.2 默认 2000ms 可配） */
@@ -90,11 +108,13 @@ export interface NlObserveOptions {
 export interface ResolvedOptions {
   serviceName: string;
   customerId: string;
-  otlpUrl?: string;
+  /** 解析后的 OTLP/HTTP 端点（endpoint ?? otlpUrl；undefined = 离线不导出） */
+  endpoint?: string;
   batchTimeoutMs: number;
 }
 
 export const DEFAULT_BATCH_TIMEOUT_MS = 2000;
+export const DEFAULT_EXPORT_TIMEOUT_MS = 5000;
 
 export class NlObserveClient {
   isInitialized = false;
@@ -122,22 +142,29 @@ export class NlObserveClient {
       console.warn('[nl-observe] init called on initialized client; ignored');
       return;
     }
+    // T17：endpoint 为规范配置名，otlpUrl 为向后兼容别名（同传 endpoint 优先）
+    const endpoint = options.endpoint ?? options.otlpUrl;
     this.resolvedOptions = {
       serviceName: options.serviceName ?? 'unknown-service',
       customerId: options.customerId ?? '',
-      otlpUrl: options.otlpUrl,
+      endpoint,
       batchTimeoutMs: options.batchTimeoutMs ?? DEFAULT_BATCH_TIMEOUT_MS,
     };
 
     const processors: SpanProcessor[] = [...(options.spanProcessors ?? [])];
     const readers: IMetricReader[] = [...(options.metricReaders ?? [])];
-    if (this.resolvedOptions.otlpUrl) {
+    if (this.resolvedOptions.endpoint) {
       // T15：OTLP/HTTP JSON 文本口径（sendBeacon 仅支持文本）——trace/metric 共享 transport；
       // BSP 内建 document-hide 自动 flush 关闭，flush 语义统一由 flush hook 拥有
       // （避免双 beacon，且每次 flush 都尽力上报 nl.sdk.flush）。
-      const transport = createOtlpHttpBeaconTransport();
+      // T17：exportTimeoutMs 作用于 fetch 回退路径；SDK 导出失败日志经 diag 落 console.debug
+      // （静默降级，NFR-03）。
+      const transport = createOtlpHttpBeaconTransport(
+        options.exportTimeoutMs ?? DEFAULT_EXPORT_TIMEOUT_MS,
+      );
+      installSilentDiagnostics();
       this.dropCounting = new DropCountingSpanExporter(
-        new SendBeaconSpanExporter({ url: this.resolvedOptions.otlpUrl, transport }),
+        new SendBeaconSpanExporter({ url: this.resolvedOptions.endpoint, transport }),
       );
       processors.push(
         new BatchSpanProcessor(this.dropCounting, {
@@ -146,7 +173,7 @@ export class NlObserveClient {
         }),
       );
       this.beaconMetricExporter = new SendBeaconMetricExporter({
-        url: metricsUrlFromTracesUrl(this.resolvedOptions.otlpUrl),
+        url: metricsUrlFromTracesUrl(this.resolvedOptions.endpoint),
         transport,
       });
       readers.push(
@@ -237,9 +264,11 @@ export class NlObserveClient {
       getTracer: () => this.tracer,
       getActiveRootSpan: () => this.business?.activeRootSpan(),
       now: options.clock,
-      isExcludedUrl: this.resolvedOptions.otlpUrl
-        ? (url: string) => url.startsWith(this.resolvedOptions.otlpUrl as string)
+      isExcludedUrl: this.resolvedOptions.endpoint
+        ? (url: string) => url.startsWith(this.resolvedOptions.endpoint as string)
         : undefined,
+      // T17 restPathFilter：自动埋点 URL 白名单（缺省全放行；trackRest 不受限）
+      restPathFilter: options.restPathFilter,
     };
     if (options.instrumentRest !== false) {
       this.restHandle = installRestInstrumentation(this.restDeps);
@@ -255,6 +284,8 @@ export class NlObserveClient {
   /**
    * 关闭：先卸载 REST 全局包装与摘监听（flush hook / 首屏跟踪）——防 flush 期间新请求
    * 再生 span——再 flush provider/meterProvider 剩余 span/metric。
+   * T17 降级策略：OTel 2.x BSP.shutdown 在导出失败（endpoint 不可达）时 reject——
+   * shutdown 是 best-effort 收尾，吞错并 console.debug，绝不把导出失败抛回业务层。
    */
   async shutdown(): Promise<void> {
     this.restHandle?.uninstall();
@@ -263,8 +294,16 @@ export class NlObserveClient {
     this.flushHook = undefined;
     this.firstScreen?.dispose();
     this.firstScreen = undefined;
-    await this.provider?.shutdown();
-    await this.meterProvider?.shutdown();
+    try {
+      await this.provider?.shutdown();
+    } catch (err) {
+      console.debug('[nl-observe] provider shutdown degraded (export failed):', err);
+    }
+    try {
+      await this.meterProvider?.shutdown();
+    } catch (err) {
+      console.debug('[nl-observe] meterProvider shutdown degraded (export failed):', err);
+    }
     this.isInitialized = false;
   }
 

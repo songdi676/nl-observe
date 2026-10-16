@@ -41,6 +41,12 @@ export interface RestRecorderDeps {
   now?: () => number;
   /** URL 排除谓词（OTLP 自身端点；缺省不排除） */
   isExcludedUrl?: (url: string) => boolean;
+  /**
+   * T17 restPathFilter：自动埋点 URL 白名单谓词（原始 URL 口径，规范化前判定）。
+   * 缺省 undefined = 全部非排除 URL 均埋点；提供时仅 true 的 URL 产生 REST span
+   * （宿主按业务路径收敛埋点面，trackRest 手动兜底不受此过滤器约束）。
+   */
+  restPathFilter?: (url: string) => boolean;
 }
 
 export interface RestSpanInput {
@@ -65,6 +71,12 @@ function nowMs(deps: RestRecorderDeps): number {
 
 function isExcluded(deps: RestRecorderDeps, url: string): boolean {
   return deps.isExcludedUrl ? deps.isExcludedUrl(url) : false;
+}
+
+/** 自动埋点判定：OTLP 自排除优先，其次 restPathFilter 白名单（缺省全放行）。 */
+function shouldInstrument(deps: RestRecorderDeps, url: string): boolean {
+  if (isExcluded(deps, url)) return false;
+  return deps.restPathFilter ? deps.restPathFilter(url) : true;
 }
 
 /** 方法规范化：大写+trim；空值缺省 GET（fetch 语义）。 */
@@ -179,7 +191,7 @@ export function installRestInstrumentation(deps: RestRecorderDeps): RestInstrume
   if (typeof originalFetch === 'function') {
     wrappedFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = extractFetchUrl(input);
-      if (url === undefined || isExcluded(deps, url)) {
+      if (url === undefined || !shouldInstrument(deps, url)) {
         return originalFetch(input, init);
       }
       // parent 取请求发起时刻的 ACTIVE 业务（业务在请求期间结束/切换不影响归属）
@@ -240,7 +252,7 @@ export function installRestInstrumentation(deps: RestRecorderDeps): RestInstrume
 
     wrappedSend = function (this: XhrLike, body?: unknown): void {
       const m = meta.get(this as object);
-      if (m && !isExcluded(deps, m.url)) {
+      if (m && shouldInstrument(deps, m.url)) {
         const parent = deps.getActiveRootSpan();
         if (parent) {
           const method = m.method;
