@@ -12,7 +12,7 @@
  * navigator.sendBeacon），metric 走 SendBeaconMetricExporter（/v1/metrics，DELTA）；
  * pagehide/visibilitychange=hidden → flush hook（尽力上报 nl.sdk.flush）；
  * nl.first_screen_load 每页一个 data point（LCP 优先，load 兜底）。
- * vue 指令在 T16。
+ * T16 落地：businessState/activeBusiness 供 vue 指令（v-biz unmount 兜底、v-span 取父）查询。
  */
 import type { Tracer } from '@opentelemetry/api';
 import { WebTracerProvider } from '@opentelemetry/sdk-trace-web';
@@ -29,8 +29,10 @@ import { SigninManager } from './SigninManager';
 import {
   BusinessManager,
   METRIC_BUSINESS_DURATION,
+  type ActiveBusiness,
   type BizEndReason,
   type BizStatus,
+  type BusinessState,
 } from './BusinessManager';
 import {
   trackFirstScreenLoad,
@@ -322,6 +324,22 @@ export class NlObserveClient {
   ): void {
     if (!this.guard('endBusiness')) return;
     this.business?.end(bizId, options);
+  }
+
+  /**
+   * 查业务实例状态（ACTIVE/SUSPENDED；ENDED 或未知 → undefined，已结束实例已移出实例表）。
+   * T16 指令 unmount 兜底用：仅未显式结束的业务才以 fail+unmount 结束，不覆盖 explicit 口径。
+   */
+  businessState(bizId: string): BusinessState | undefined {
+    if (!this.guard('businessState')) return undefined;
+    return this.business?.stateOf(bizId);
+  }
+
+  /** 当前 ACTIVE 业务（bizId + root span；至多一个——T13 Major-2 不变量；无则 undefined）。
+   *  T16 v-span 指令取子 span 父（与 T14 REST 埋点取父同规则）。 */
+  activeBusiness(): ActiveBusiness | undefined {
+    if (!this.guard('activeBusiness')) return undefined;
+    return this.business?.getActive();
   }
 
   /**

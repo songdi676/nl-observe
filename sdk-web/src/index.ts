@@ -8,6 +8,9 @@ export type { NlObserveOptions, ResolvedOptions } from './core/client';
 export type { NlObserveGuardEntry } from './core/guard';
 export { SigninManager } from './core/SigninManager';
 export type { SigninState } from './core/SigninManager';
+// T16：vue 指令共享生命周期（框架无关，vue2/vue3 入口经 `export * from './index'` 一并导出）
+export { VSPAN_NAME_PREFIX, createDirectiveLifecycle } from './adapters/lifecycle';
+export type { DirectiveLifecycle } from './adapters/lifecycle';
 export {
   BIZ_BUSINESS_NAME_PREFIX,
   ATTR_BIZ_CODE,
@@ -21,7 +24,13 @@ export {
   METRIC_BUSINESS_DURATION,
   BusinessManager,
 } from './core/BusinessManager';
-export type { BizEndReason, BizStatus, BusinessState, BusinessDurationAttrs } from './core/BusinessManager';
+export type {
+  ActiveBusiness,
+  BizEndReason,
+  BizStatus,
+  BusinessState,
+  BusinessDurationAttrs,
+} from './core/BusinessManager';
 export {
   METRIC_FIRST_SCREEN_LOAD,
   METRIC_SDK_FLUSH,

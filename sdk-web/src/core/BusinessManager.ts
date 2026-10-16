@@ -58,6 +58,12 @@ export const BIZ_CODE_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
 /** 并发未结束业务实例上限（安全评审 F1：宿主缺陷循环反复 startBusiness 的 DoS 面设限） */
 export const MAX_CONCURRENT_INSTANCES = 128;
 
+/** 当前 ACTIVE 业务快照（T16 v-span 指令取子 span 父上下文用）。 */
+export interface ActiveBusiness {
+  bizId: string;
+  span: Span;
+}
+
 export interface BusinessManagerDeps {
   tracer: Tracer;
   isSignedIn: () => boolean;
@@ -116,6 +122,15 @@ export class BusinessManager {
   activeRootSpan(): Span | undefined {
     for (const inst of this.instances.values()) {
       if (inst.state === 'ACTIVE') return inst.span;
+    }
+    return undefined;
+  }
+
+  /** 当前 ACTIVE 业务（至多一个——T13 Major-2 不变量；无则 undefined）。
+   *  T16 v-span 指令以此为子 span 父（与 T14 REST 埋点取父同规则）。 */
+  getActive(): ActiveBusiness | undefined {
+    for (const inst of this.instances.values()) {
+      if (inst.state === 'ACTIVE') return { bizId: inst.bizId, span: inst.span };
     }
     return undefined;
   }
