@@ -74,6 +74,10 @@ export default defineConfig({
           include: ['test/core.spec.ts', 'test/business.spec.ts', 'test/flush.spec.ts', 'test/rest.spec.ts'],
         },
       },
+      // T21 POC：micro-app 沙箱捕获率验证（workspace 成员）。经目录引用其自带
+      // vitest.config.ts——dangerouslyIgnoreUnhandledErrors（rc.32 探针容忍，见该文件注释）
+      // 在 vitest 5 是 NonProjectOptions，内联 project 条目类型上不允许，配置文件顶层合法。
+      './poc/micro-app-capture',
     ],
     coverage: {
       provider: 'v8',

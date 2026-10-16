@@ -178,3 +178,66 @@ Testcontainers Kafka 镜像依旧不可用，`ReceiverOtlpKafkaIT`（验收 #1�
   「漏洞失败」与「网络不可达」。本仓库开发期以本地已安装树 + lockfile 为准。
 - 根 package-lock.json 曾由手工合并产生（84/349 条目缺 `resolved`+`integrity`，安全评审
   A08 Medium），已删除并用 `npm install` 重新生成为 npm 原生产物。
+
+## 7. T21 POC：micro-app 沙箱下子应用 span 捕获率验证（2026-10-17）
+
+工程：`poc/micro-app-capture/`（workspace 成员；独立跑 `npm test -w poc-micro-app-capture`，
+根 vitest projects 亦聚合，project 名 `poc-micro-app-capture`）。
+场景矩阵：版本线 × jsSandbox 开/关 × SDK 放置（sub=子应用内自初始化 / host=宿主初始化、
+子应用经包装 fetch 自动捕获）× 10 次 fetch → 自动捕获断言（验收 #1：≥9/10）+ trackRest
+兜底补记断言（验收 #2：完整覆盖且 parent 正确）。
+
+### 实测捕获率（jsdom 26.1.0 + vitest 5.0.4，0.8.11 稳定线）
+
+```
+[T21-POC] line=0.8.11 sandbox=on  sdk=sub  auto=10/10 fallback=10/10 fetchErrors=0
+[T21-POC] line=0.8.11 sandbox=on  sdk=host auto=10/10 fallback=10/10 fetchErrors=0
+[T21-POC] line=0.8.11 sandbox=off sdk=sub  auto=10/10 fallback=10/10 fetchErrors=0
+[T21-POC] line=0.8.11 sandbox=off sdk=host auto=10/10 fallback=10/10 fetchErrors=0
+```
+
+**验收 #1 达成**：0.8.11 jsSandbox 开启下自动 REST span 10/10 ≥ 9/10（两种 SDK 放置均满足），
+无需降级到兜底路径。**验收 #2 同步验证**：兜底 trackRest 补记在全部场景 10/10 完整、
+parent 均钉在业务 root（span 名 `HTTP {METHOD}`、kind=CLIENT、白名单 4 属性、route 去 query），
+v-span 手动钉 parent 由 fallback.spec.ts 单测覆盖。
+
+### 结论与裁决
+
+- 0.8.11 稳定线（集成文档推荐线）沙箱内 fetch 穿透 with-scope → proxy get 回退 rawWindow →
+  宿主包装的 fetch 可见 → 自动埋点足够；沙箱对 SDK 自动 REST 捕获无实质损耗。
+- 兜底路径（trackRest/v-span）是框架无关的 SDK 能力，已验证可用、parent 语义正确，
+  作为沙箱保真度不确定场景（rc 线、iframe、shadowDOM 组合）的保险，非默认必需。
+- rc.32（1.0.0-rc.32）在 jsdom 下不可跑通（见下），捕获率留真实浏览器复验（跟进项）。
+
+### rc.32 线 jsdom 保真缺口（capture-rc32.spec.ts 探针钉住）
+
+- sandbox 开：挂载收尾 `sandBox.microAppWindow.dispatchEvent(CustomEvent)`（CustomWindow 是
+  普通对象作 proxy target）→ jsdom EventTarget 品牌校验拒绝 → MOUNTED 不达 → renderApp
+  预算内不 resolve（并产生 micro-app 内部 unhandled rejection，项目级
+  `dangerouslyIgnoreUnhandledErrors: true` 显式容忍）。
+- sandbox 关：renderApp 完成性依赖进程内先前状态（单独跑 resolve；先前沙箱挂载崩溃后挂起），
+  决定性事实两种形态一致：子应用就绪信号不达 → jsdom 下无法测量捕获率。
+- 真实浏览器该路径预期成立（品牌校验是 jsdom 特有约束）；跟进项：真浏览器（Playwright）
+  跑同工装复验 rc.32 捕获率。
+
+### 双版本线 API 面差异（集成文档需标注）
+
+| 点 | 0.8.11 | 1.0.0-rc.32 |
+|---|---|---|
+| 挂载 | 声明式 `<micro-app>` 元素 | `renderApp(options)` 命令式（Promise，resolve 于 MOUNTED/ERROR） |
+| 卸载 | `unmountApp` 独立命名导出 | 实例方法 `microApp.unmountApp` |
+| 沙箱 | 默认开，`disable-sandbox` 属性关 | 同语义经 options `'disable-sandbox': true` |
+| start() | 可重复（warn） | 仅一次（hasInit，重复 logError） |
+
+### jsdom 环境 shim（POC 工装弥合，正式集成不需要）
+
+- fetch 绑定：浏览器 globalThis===window；vitest jsdom 下分裂（undici vs 无）→
+  `installFetchBindingShim()` 统一两侧 get/set。
+- rc.32 模块顶层 `new Proxy(window.Worker,…)`：jsdom 无 Worker → `src/worker-shim.ts`
+  导入期补桩（导入顺序敏感）。
+- 沙箱内 SDK init：proxyWindow 非真 EventTarget → `windowLike: null, performanceObserver: null`
+  离线模式（不注册窗口监听器）。
+- esbuild JS API 在 jsdom worker 内模块加载断言必假 → bundle 构建走子进程
+  `app/build-bundle.mjs`；`import.meta.url` 被 jsdom 改写 → 按 cwd 探测工程目录。
+- 两阶段确定性握手 `poc:phase1 → poc:phase1-ack → poc:done`：无 ack 则兜底 span 泄漏进
+  自动快照；host 模式另以基线 id 集合扣除 micro-app 自身资源 fetch（html+bundle）。

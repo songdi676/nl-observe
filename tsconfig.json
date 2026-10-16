@@ -8,7 +8,11 @@
     "skipLibCheck": true,
     "noEmit": true,
     "types": ["node"],
-    "lib": ["ES2020", "DOM"]
+    "lib": ["ES2020", "DOM"],
+    "baseUrl": ".",
+    "paths": {
+      "@nl-observe/sdk-web": ["./sdk-web/src/index.ts"]
+    }
   },
   "include": [
     "vitest.config.ts",
@@ -16,6 +20,9 @@
     "poc/sdk-vue2-init/test",
     "poc/sdk-vue3-init/src",
     "poc/sdk-vue3-init/test",
+    "poc/micro-app-capture/src",
+    "poc/micro-app-capture/test",
+    "poc/micro-app-capture/app",
     "sdk-web/src",
     "sdk-web/test/dist-loads.spec.ts",
     "sdk-web/test/core.spec.ts",
