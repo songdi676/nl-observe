@@ -21,7 +21,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(properties = {
         "spring.kafka.listener.auto-startup=false",
         "spring.kafka.bootstrap-servers=127.0.0.1:59092",
-        "observe.databend.url=jdbc:databend://127.0.0.1:8000/observe?presigned_url_disabled=true"
+        "observe.databend.url=jdbc:databend://127.0.0.1:8000/observe?presigned_url_disabled=true",
+        // T08：启动 SELECT 1 连接自检置 false（本用例不依赖真实 Databend；
+        // presigned_url_disabled 校验不豁免，仍由 DatabendPropertiesTest/DatabendStartupCheckTest 覆盖）
+        "observe.databend.check-on-startup=false"
 })
 class StorageContextTest {
 

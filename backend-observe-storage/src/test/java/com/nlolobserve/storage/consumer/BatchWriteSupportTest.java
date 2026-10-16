@@ -17,18 +17,20 @@ import org.springframework.kafka.support.Acknowledgment;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
  * T07 验收：写库成功后才提交 offset（at-least-once）；
- * 写失败重试 3 次（初次 + 3 次重试 = 4 次调用）后 error 日志 + 跳过该批不提交。
+ * 写失败重试 3 次（初次 + 3 重试 = 4 次尝试）后 error 日志 + 跳过该批不提交。
+ * T08 评审 backport（T07 遗留）：重试间退避（线性 backoff，默认 500ms 基数），
+ * 避免 DB 故障时对 Databend/Kafka 的忙轮询。
  */
 class BatchWriteSupportTest {
 
-    private final BatchWriteSupport support = new BatchWriteSupport();
+    /** 单测用极小退避基数（生产默认 500ms，见 {@link BatchWriteSupport#DEFAULT_RETRY_BACKOFF_MS}） */
+    private final BatchWriteSupport support = new BatchWriteSupport(1);
     private Acknowledgment ack;
     private ListAppender<ILoggingEvent> logAppender;
 
@@ -88,6 +90,45 @@ class BatchWriteSupportTest {
         List<String> seen = new ArrayList<>();
         support.handleBatch(records(2), ack, seen::addAll, "traces");
         assertThat(seen).containsExactly("payload-0", "payload-1");
+    }
+
+    @Test
+    void retryBackoff_sleepsLinearlyBetweenRetries() {
+        List<Long> sleeps = new ArrayList<>();
+        BatchWriteSupport recording = new BatchWriteSupport(500) {
+            @Override
+            void sleepBackoff(long millis) {
+                sleeps.add(millis);
+            }
+        };
+        AtomicInteger calls = new AtomicInteger();
+        recording.handleBatch(records(1), ack, payloads -> {
+            if (calls.incrementAndGet() <= 3) {
+                throw new IllegalStateException("db down");
+            }
+        }, "traces");
+
+        assertThat(calls.get()).isEqualTo(4);
+        assertThat(sleeps).as("重试 3 次 → 线性退避 3 段").containsExactly(500L, 1000L, 1500L);
+        verify(ack).acknowledge();
+    }
+
+    @Test
+    void retryBackoff_disabledWithZeroBase() {
+        List<Long> sleeps = new ArrayList<>();
+        BatchWriteSupport noBackoff = new BatchWriteSupport(0) {
+            @Override
+            void sleepBackoff(long millis) {
+                sleeps.add(millis);
+            }
+        };
+        AtomicInteger calls = new AtomicInteger();
+        noBackoff.handleBatch(records(1), ack, payloads -> {
+            calls.incrementAndGet();
+            throw new IllegalStateException("db down");
+        }, "metrics");
+        assertThat(calls.get()).isEqualTo(4);
+        assertThat(sleeps).containsExactly(0L, 0L, 0L);
     }
 
     private static List<ConsumerRecord<String, String>> records(int count) {
