@@ -37,4 +37,20 @@ class OpsViewRateLimiterTest {
     void defaultLimitIs60PerMin() {
         assertThat(new QueryProperties().getOpsViewRateLimitPerMin()).isEqualTo(60);
     }
+
+    @Test
+    void windowRollsOver_whenClockAdvancesPastWindow() {
+        // 评审 M-1：注入时钟下窗口滚动确定化（固定时钟验收用例的判定基础）
+        long[] now = {0L};
+        QueryProperties props = new QueryProperties();
+        props.setOpsViewRateLimitPerMin(2);
+        OpsViewRateLimiter limiter = new OpsViewRateLimiter(props, () -> now[0]);
+        assertThat(limiter.tryAcquire()).isTrue();
+        assertThat(limiter.tryAcquire()).isTrue();
+        assertThat(limiter.tryAcquire()).isFalse(); // 窗口内配额耗尽
+        now[0] = 60_000L; // 跨过窗口边界 → 计数清零
+        assertThat(limiter.tryAcquire()).isTrue();
+        assertThat(limiter.tryAcquire()).isTrue();
+        assertThat(limiter.tryAcquire()).isFalse();
+    }
 }

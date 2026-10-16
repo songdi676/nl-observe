@@ -19,6 +19,8 @@ import javax.sql.DataSource;
 import com.nlolobserve.common.ddl.DdlScripts;
 import com.nlolobserve.query.config.DatabendDataSourceConfig;
 import com.nlolobserve.query.config.DatabendProperties;
+import com.nlolobserve.query.config.QueryProperties;
+import com.nlolobserve.query.service.OpsViewRateLimiter;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
@@ -28,6 +30,9 @@ import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -45,8 +50,9 @@ import org.testcontainers.utility.DockerImageName;
  * （生产 {@link DatabendDataSourceConfig} 只读池 + 启动 SELECT 1 自检）+ MockMvc 全栈
  * （Controller→Service→QueryRepository→Databend），断言预置数据的真实返回形态（详设 §2.1-§2.4）。
  *
- * <p>用例顺序显式 {@link Order}：运维视图限流用例（共享限流桶）必须最后执行，
- * 排空前 60 次/分配额，避免污染其前序运维视图用例的 200 断言。
+ * <p>用例顺序显式 {@link Order}：运维视图限流用例（共享限流桶）须在所有运维视图
+ * （不带 customerId）用例之后执行，排空前 60 次/分配额，避免污染其前序运维视图
+ * 用例的 200 断言（Order(15)/(16) 走参数校验/客户作用域，不触碰运维视图配额，可在其后）。
  *
  * <p>env-gated（详设 §6.2）：Docker 不可用或镜像不可得时按 assumption 跳过，不判失败。
  */
@@ -59,6 +65,8 @@ import org.testcontainers.utility.DockerImageName;
 class QueryApiSeedDataIntegrationTest {
 
     private static final String DEFAULT_IMAGE_NAME = "datafuselabs/databend:latest";
+    /** 固定时钟取值（评审 M-1：窗口永不推进，超频验收断言确定化） */
+    private static final long FROZEN_NOW_MS = 1_787_000_000_000L;
 
     /** 预置样例（与断言一一对应）：c-1/t-1 = 业务 root（success）+ REST 子 span（白名单 4 属性）；
      *  c-1/t-2 = 同 bizCode 第二业务（fail/unmount）；c-2 无任何数据（无数据 40401 断言用）。 */
@@ -446,7 +454,7 @@ class QueryApiSeedDataIntegrationTest {
                 // ORDER：21 root span（duration 100..300 步长 10）→ P95=第 20 小=290.0；20 success/21
                 .andExpect(jsonPath("$.data.perBiz[0].bizCode").value("ORDER"))
                 .andExpect(jsonPath("$.data.perBiz[0].effectiveDurationP95").value(ORDER_P95_MANUAL))
-                .andExpect(jsonPath("$.data.perBiz[0].successRate").value(closeTo(ORDER_SUCCESS_COUNT / 21.0, 1e-9)))
+                .andExpect(jsonPath("$.data.perBiz[0].successRate").value(closeTo(ORDER_SUCCESS_COUNT / (double) ORDER_SPANS, 1e-9)))
                 .andExpect(jsonPath("$.data.perBiz[0].count").value(ORDER_SPANS))
                 // PAY：5 个全等值 1234.0 → 任意 quantile 口径 P95=1234.0；4 success/5=0.8
                 .andExpect(jsonPath("$.data.perBiz[1].bizCode").value("PAY"))
@@ -488,8 +496,10 @@ class QueryApiSeedDataIntegrationTest {
     @Order(14)
     @Test
     void metricsSummary_opsView_overLimit_returns42901() throws Exception {
-        // 限额 60 次/分（@SpringBootTest 属性）：连续 61 次运维视图调用，首个 429 必现于 61 次内，
-        // 且首个 429 之后（同一固定窗口内）全部 429。前序 Order(13) 至多消耗 1 次配额，不影响判定。
+        // 限额 60 次/分（@SpringBootTest 属性）+ 固定时钟（见 FrozenClockRateLimiterConfig，评审 M-1）：
+        // 窗口永不推进 → 连续 61 次运维视图调用，首个 429 必现于 61 次内，且首个 429 之后
+        // 全部 429——判定与循环墙钟耗时无关（慢 CI 上 61×2 次真实 Databend 查询可能超 60s，
+        // 真实时钟下会跨窗口清零导致一次 429 都不出现）。前序 Order(13) 至多消耗 1 次配额，不影响判定。
         List<Integer> statuses = new ArrayList<>();
         for (int i = 0; i < 61; i++) {
             statuses.add(mockMvc.perform(get("/api/observe/metrics/summary")
@@ -524,6 +534,20 @@ class QueryApiSeedDataIntegrationTest {
                         .param("from", "2026-09-01").param("to", "2026-09-30").param("customerId", "c-2"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(40401));
+    }
+
+    /**
+     * 评审 M-1：以固定时间源替换运维视图限流 bean（@Primary 覆盖组件扫描实例）——
+     * 60s 固定窗口永不滚动，Order(14) 的「61 次内首个 429 必现」断言不再依赖循环
+     * 墙钟耗时；窗口滚动语义由 {@code OpsViewRateLimiterTest} 注入时钟单测钉住。
+     */
+    @TestConfiguration
+    static class FrozenClockRateLimiterConfig {
+        @Bean
+        @Primary
+        OpsViewRateLimiter frozenOpsViewRateLimiter(QueryProperties properties) {
+            return new OpsViewRateLimiter(properties, () -> FROZEN_NOW_MS);
+        }
     }
 
     private static String withPresignedDisabled(String jdbcUrl) {

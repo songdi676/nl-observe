@@ -40,6 +40,11 @@ import org.testcontainers.utility.DockerImageName;
  *
  * env-gated（详设 §6.2）：Docker 不可用或镜像不可得时按 assumption 跳过，不判失败；
  * 镜像可用时本测试是 DDL/模板方言正确性的最终验收。
+ *
+ * <p>本类同时是 Databend {@code quantile} 语义哨兵（评审 m-1）：P95 断言钉死精确值
+ * （下秩、不插值，与 ClickHouse 线性插值口径不同）。默认镜像 tag 浮动（latest），CI 若经
+ * {@code NL_OBSERVE_DATABEND_IMAGE} 钉版本或 latest 升级后 quantile 实现变化导致本类变红，
+ * 先核对语义口径再动断言。
  */
 class QueryRepositoryDatabendIntegrationTest {
 
