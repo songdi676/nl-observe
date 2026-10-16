@@ -40,6 +40,11 @@ import org.testcontainers.utility.DockerImageName;
  *
  * env-gated（详设 §6.2）：Docker 不可用或镜像不可得时按 assumption 跳过，不判失败；
  * 镜像可用时本测试是 DDL/模板方言正确性的最终验收。
+ *
+ * <p>本类同时是 Databend {@code quantile} 语义哨兵（评审 m-1）：P95 断言钉死精确值
+ * （下秩、不插值，与 ClickHouse 线性插值口径不同）。默认镜像 tag 浮动（latest），CI 若经
+ * {@code NL_OBSERVE_DATABEND_IMAGE} 钉版本或 latest 升级后 quantile 实现变化导致本类变红，
+ * 先核对语义口径再动断言。
  */
 class QueryRepositoryDatabendIntegrationTest {
 
@@ -187,13 +192,13 @@ class QueryRepositoryDatabendIntegrationTest {
 
     @Test
     void firstScreenLoadP95_queryRunsOnRealDatabend() {
-        // 不断言精确插值：Databend quantile 语义与 ClickHouse 线性插值不同（T11 对拍前
-        // 以真实 Databend 固化口径，见 T09 评审 Minor）；此处验证方言可执行且值域正确
+        // T11 已以真实 Databend 固化口径：quantile(level)(x) = v[floor(level*(n-1))]
+        // （0 基下秩、无插值，与 ClickHouse BTD/线性插值不同）。两点 {1000.0, 1830.5}
+        // → floor(0.95*1)=0 → 最小值 1000.0，精确断言。
         Double p95 = repository.findFirstScreenLoadP95(FROM, TO, "c-1");
-        assertThat(p95).isNotNull();
-        assertThat(p95).isBetween(1000.0, 1830.5);
+        assertThat(p95).isEqualTo(1000.0);
         // 运维视图（customerId 空串）同样可查
-        assertThat(repository.findFirstScreenLoadP95(FROM, TO, "")).isNotNull();
+        assertThat(repository.findFirstScreenLoadP95(FROM, TO, "")).isEqualTo(1000.0);
     }
 
     @Test
