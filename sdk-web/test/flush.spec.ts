@@ -40,6 +40,7 @@ import {
   FLUSH_MODE_BEACON,
   METRIC_FIRST_SCREEN_LOAD,
   METRIC_SDK_FLUSH,
+  type FlushResult,
   type LcpEntryList,
   type LcpObserverCtor,
   type WindowLike,
@@ -51,6 +52,7 @@ import {
   SendBeaconSpanExporter,
   createOtlpHttpBeaconTransport,
   metricsUrlFromTracesUrl,
+  setupFlushHook,
 } from '../src/core/flush';
 
 /** 死端口：fetch 回退 transport 快速 ECONNREFUSED（触发 flush fail 路径） */
@@ -59,6 +61,8 @@ const DEAD_OTLP_URL = 'http://127.0.0.1:1/v1/traces';
 const LONG_DELAY_MS = 3_600_000;
 
 interface FakeWindow extends WindowLike {
+  // WindowLike.visibilityState 按真实 DOM 建模为只读属性；fake 需运行时改写，此处放宽为可变属性
+  visibilityState: string;
   dispatch(type: string): void;
   listenerCount(type: string): number;
   setVisibility(v: 'visible' | 'hidden'): void;
@@ -66,8 +70,7 @@ interface FakeWindow extends WindowLike {
 
 function makeFakeWindow(initial: 'visible' | 'hidden' = 'visible'): FakeWindow {
   const listeners = new Map<string, Set<() => void>>();
-  let visibility = initial;
-  return {
+  const win: FakeWindow = {
     addEventListener: (type, handler) => {
       let set = listeners.get(type);
       if (!set) {
@@ -79,15 +82,16 @@ function makeFakeWindow(initial: 'visible' | 'hidden' = 'visible'): FakeWindow {
     removeEventListener: (type, handler) => {
       listeners.get(type)?.delete(handler);
     },
-    visibilityState: () => visibility,
+    visibilityState: initial,
     dispatch: (type) => {
       for (const h of [...(listeners.get(type) ?? [])]) h();
     },
     listenerCount: (type) => listeners.get(type)?.size ?? 0,
     setVisibility: (v) => {
-      visibility = v;
+      win.visibilityState = v;
     },
   };
+  return win;
 }
 
 interface FlushHarness {
@@ -260,6 +264,68 @@ describe('T15 flush 触发（pagehide / visibilitychange=hidden）', () => {
     expect(traceFlush).toHaveBeenCalledTimes(1);
     await client.shutdown();
   });
+
+  it('default windowLike + 真实 DOM 形态（window 无 visibilityState 成员，只在 document 上）→ visibilitychange=hidden 触发 flush（Critical-1 回归）', async () => {
+    // 真实浏览器：visibilityState 是 Document 属性、window 无该成员。旧实现按方法调用
+    // win.visibilityState() → 生产默认路径（宿主不注入 windowLike）每次抛 TypeError，
+    // visibilitychange flush 永不执行；FakeWindow 的方法形态恰好掩盖。此处以全局变量
+    // 模拟真实 window/document 形态，钉死 defaultWindowLike() 适配器路径。
+    const listeners = new Map<string, Set<() => void>>();
+    const rawWindow = {
+      addEventListener: (t: string, h: () => void) => {
+        let set = listeners.get(t);
+        if (!set) {
+          set = new Set();
+          listeners.set(t, set);
+        }
+        set.add(h);
+      },
+      removeEventListener: (t: string, h: () => void) => {
+        listeners.get(t)?.delete(h);
+      },
+    };
+    const doc = { visibilityState: 'hidden' };
+    const winDesc = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    const docDesc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: rawWindow });
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: doc });
+    try {
+      const traceFlush = vi
+        .spyOn(WebTracerProvider.prototype, 'forceFlush')
+        .mockImplementation(() => Promise.resolve());
+      const meterFlush = vi
+        .spyOn(MeterProvider.prototype, 'forceFlush')
+        .mockImplementation(() => Promise.resolve());
+      const reader = new PeriodicExportingMetricReader({
+        exporter: new InMemoryMetricExporter(AggregationTemporality.DELTA),
+        exportIntervalMillis: LONG_DELAY_MS,
+      });
+      const client = new NlObserveClient();
+      client.init({
+        serviceName: 't15',
+        customerId: 'C-1',
+        batchTimeoutMs: LONG_DELAY_MS,
+        metricReaders: [reader],
+      }); // 不注入 windowLike → 走 defaultWindowLike() 适配器
+
+      // 派发 visibilitychange：旧缺陷下此处抛 TypeError（win.visibilityState is not a function）
+      for (const h of [...(listeners.get('visibilitychange') ?? [])]) h();
+      await vi.waitFor(() => expect(traceFlush).toHaveBeenCalled());
+      expect(meterFlush).toHaveBeenCalled();
+      await client.shutdown();
+    } finally {
+      if (winDesc) {
+        Object.defineProperty(globalThis, 'window', winDesc);
+      } else {
+        delete (globalThis as Record<string, unknown>).window;
+      }
+      if (docDesc) {
+        Object.defineProperty(globalThis, 'document', docDesc);
+      } else {
+        delete (globalThis as Record<string, unknown>).document;
+      }
+    }
+  });
 });
 
 describe('T15 nl.sdk.flush 上报（失败/超时/成功形态固化）', () => {
@@ -343,6 +409,28 @@ describe('T15 nl.sdk.flush 上报（失败/超时/成功形态固化）', () => 
     expect(dp.attributes[ATTR_FLUSH_RESULT]).toBe('ok');
     expect(dp.attributes[ATTR_DROPPED_SPANS]).toBe(0);
     await client.shutdown();
+  });
+
+  it('陈旧 lastError（本次 flush 前的周期导出失败）→ flushNow 入口先 reset，成功 flush 仍 result=ok（Major-1 回归）', async () => {
+    let exportError: unknown = new Error('stale periodic export failure');
+    const reported: Array<{ result: FlushResult; dropped: number }> = [];
+    const hook = setupFlushHook({
+      forceFlushAll: () => Promise.resolve(),
+      getDroppedSpans: () => 0,
+      reportFlush: (result, dropped) => reported.push({ result, dropped }),
+      getExportError: () => exportError,
+      resetExportError: () => {
+        exportError = undefined;
+      },
+      windowLike: null, // 不挂监听，直接驱动 flushNow
+    });
+
+    await hook.flushNow();
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0].result).toBe('ok'); // 修复前：陈旧错误驻留 → 成功 flush 误报 'fail'
+    expect(reported[0].dropped).toBe(0);
+    hook.dispose();
   });
 });
 
@@ -454,6 +542,31 @@ describe('T15 OTLP/JSON 载荷形态（SendBeacon 导出器）', () => {
     // DELTA：无新增的下一周期不重发（cumulative 会重发 → 后端 append 表重复行，T13 Major-1）
     await reader.forceFlush();
     expect(bodies).toHaveLength(1);
+    await mp.shutdown();
+  });
+
+  it('SendBeaconMetricExporter：失败→成功后 lastError 清零（陈旧错误不驻留，Major-1 源头修复）', async () => {
+    let failing = true;
+    const exporter = new SendBeaconMetricExporter({
+      url: 'http://h:4318/v1/metrics',
+      transport: () =>
+        failing ? Promise.reject(new Error('periodic export boom')) : Promise.resolve(),
+    });
+    const reader = new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: LONG_DELAY_MS });
+    const mp = new MeterProvider({
+      resource: resourceFromAttributes({ 'service.name': 't15' }),
+      readers: [reader],
+    });
+    const counter = mp.getMeter('t15').createCounter('nl.test_counter');
+
+    counter.add(1, { k: 'v' });
+    await reader.forceFlush(); // 导出失败（reader 吞错）→ lastError 置位
+    expect(exporter.getLastError()).toBeDefined();
+
+    failing = false;
+    counter.add(1, { k: 'v' });
+    await reader.forceFlush(); // 导出成功 → lastError 清零
+    expect(exporter.getLastError()).toBeUndefined();
     await mp.shutdown();
   });
 });

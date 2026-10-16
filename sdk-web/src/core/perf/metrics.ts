@@ -35,17 +35,42 @@ export interface LcpObserverLike {
 
 export type LcpObserverCtor = new (callback: (list: LcpEntryList) => void) => LcpObserverLike;
 
-/** window 最小面（可注入 fake：监听注册/派发/visibilityState） */
+/**
+ * window 最小面（可注入 fake：监听注册/派发/visibilityState）。
+ * visibilityState 按真实 DOM 形态建模为只读属性——真实浏览器里它是 Document 的
+ * 属性、window 上没有该成员（评审 Critical-1：此前建模成方法，生产默认路径下
+ * visibilitychange 处理器每次抛 TypeError，hidden→forceFlush 永不执行）。
+ */
 export interface WindowLike {
   addEventListener(type: string, handler: () => void): void;
   removeEventListener(type: string, handler: () => void): void;
-  visibilityState(): string;
+  readonly visibilityState: string;
 }
 
-/** 缺省 window（node/SSR → null）。 */
+/** 真实 window 的监听面（无 visibilityState 成员——适配器不得谎称 window 满足 WindowLike）。 */
+interface RawWindow {
+  addEventListener(type: string, handler: () => void): void;
+  removeEventListener(type: string, handler: () => void): void;
+}
+
+/**
+ * 缺省 window（node/SSR → null）：返回适配器而非裸 window——
+ * 监听挂 window（visibilitychange 从 document 冒泡到 window），
+ * visibilityState 读 document.visibilityState（真实 DOM 落点），缺失按 'visible'。
+ */
 export function defaultWindowLike(): WindowLike | null {
-  const w = (globalThis as unknown as { window?: WindowLike }).window;
-  return typeof w?.addEventListener === 'function' ? w : null;
+  const w = (globalThis as unknown as { window?: RawWindow }).window;
+  if (typeof w?.addEventListener !== 'function' || typeof w.removeEventListener !== 'function') {
+    return null;
+  }
+  const doc = (globalThis as unknown as { document?: { visibilityState?: string } }).document;
+  return {
+    addEventListener: (type, handler) => w.addEventListener(type, handler),
+    removeEventListener: (type, handler) => w.removeEventListener(type, handler),
+    get visibilityState() {
+      return doc?.visibilityState ?? 'visible';
+    },
+  };
 }
 
 /** 缺省 PerformanceObserver 构造器（node 无 LCP entry type → observe 时 try/catch 兜底）。 */

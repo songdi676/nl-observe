@@ -109,7 +109,10 @@ export class SendBeaconMetricExporter implements PushMetricExporter {
 
   export(metrics: ResourceMetrics, resultCallback: (result: ExportResult) => void): void {
     void this.doExport(metrics).then(
-      () => resultCallback({ code: ExportResultCode.SUCCESS }),
+      () => {
+        this.lastError = undefined; // 成功清零：陈旧失败不得驻留污染后续 flush 分类（Major-1 源头）
+        resultCallback({ code: ExportResultCode.SUCCESS });
+      },
       (err: unknown) => {
         this.lastError = err;
         resultCallback({ code: ExportResultCode.FAILED });
@@ -253,6 +256,9 @@ export function setupFlushHook(deps: FlushHookDeps): FlushHook {
     try {
       let result: FlushResult;
       try {
+        // 先重置：result 分类只反映本次尝试内的导出错误——周期导出（batchTimeout 间隔）
+        // 留下的陈旧 lastError 不得污染本次 result（评审 Major-1：成功 flush 被误判 fail）
+        deps.resetExportError?.();
         await withTimeout(Promise.resolve(deps.forceFlushAll()), flushTimeoutMs);
         // forceFlush resolve 但 metric 导出被 reader 静默吞错 → 仍算 fail
         result = deps.getExportError?.() !== undefined ? 'fail' : 'ok';
@@ -287,7 +293,8 @@ export function setupFlushHook(deps: FlushHookDeps): FlushHook {
     void flushNow();
   };
   const onVisibilityChange = (): void => {
-    if (win?.visibilityState() === 'hidden') {
+    // visibilityState 是属性（真实 DOM 形态，经 defaultWindowLike 适配器读 document）——勿改回方法调用
+    if (win?.visibilityState === 'hidden') {
       void flushNow();
     }
   };
