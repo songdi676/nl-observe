@@ -20,7 +20,8 @@ import org.slf4j.LoggerFactory;
  * common pool 线程上为 null，每个 OTLP/HTTP 请求都 500。
  * 本类覆写该 2 参方法：处理体改派发到 Vert.x worker 上下文（executeBlocking，currentContext 非空），
  * 成功/超时/失败的状态码语义（200/503/500）与库实现一致（错误事件用同一 Instrumentation 实例记录）。
- * 上游若修复（>1.2.1）可删除本类。
+ * T06 追加 checkBody 覆写：请求体上限改由可配置过滤器层执行（库内 10MB 硬编码不可配，
+ * 见 {@link HttpBodyGuards}）——上游即使修复 HTTP 通路缺陷，本适配仍需保留以支持可配上限。
  */
 public class ContextSafeTracesCollector extends TracesCollector {
 
@@ -37,6 +38,13 @@ public class ContextSafeTracesCollector extends TracesCollector {
             command.run();
             return null;
         });
+    }
+
+    @Override
+    protected void checkBody(RoutingContext ctx) {
+        // T06：请求体上限由 OtlpSecurityFilter 在 Router 前按可配置 observe.security.max-request-bytes
+        // 强制执行（413/41301）；此处跳过库硬编码 10MB 检查，保留缺体/Expect 语义（见 HttpBodyGuards）
+        HttpBodyGuards.checkBodyOrNext(ctx);
     }
 
     @Override

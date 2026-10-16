@@ -1,8 +1,17 @@
-# T04/T05 receiver 配置（详设 §5）；Kafka 凭证走环境变量（NFR-04，代码不落口令）
+# T04/T05/T06 receiver 配置（详设 §5）；Kafka 凭证走环境变量（NFR-04，代码不落口令）
 observe:
   otlp:
     # OTLP/HTTP 接收端口（Vert.x，独立于 servlet 端口）；集成测试用随机端口覆盖
     port: ${OBSERVE_OTLP_PORT:4318}
+  security:
+    # T06 入口安全（详设 §5，质疑者2 R1 防伪造/DoS）：
+    # 白名单按直连口径（remoteAddr）判定，不信任 X-Forwarded-For（防伪造）；
+    # 同时覆盖 collector 三 OTLP 入口（Vert.x 4318）与 Spring MVC /config/producer
+    allowed-cidrs: ${OBSERVE_ALLOWED_CIDRS:10.0.0.0/8}
+    # 请求体上限（字节），超限 413/41301
+    max-request-bytes: 10485760
+    # 每客户端 IP 每分钟请求上限（滑动窗口），超限 429/42901
+    rate-limit-per-min: 600
   kafka:
     # producer 参数逐项对应需求 yaml（详设 §5；T05 验收 #2 经 /config/producer 断言）
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:10.1.8.33:9092}

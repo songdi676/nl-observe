@@ -4,7 +4,13 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nlolobserve.receiver.config.OtlpProperties;
+import com.nlolobserve.receiver.config.SecurityFilterProperties;
+import com.nlolobserve.receiver.filter.CidrMatcher;
+import com.nlolobserve.receiver.filter.OtlpSecurityFilter;
+import com.nlolobserve.receiver.filter.SlidingWindowRateLimiter;
+import com.nlolobserve.receiver.metrics.RejectedCounter;
 
 import io.mishmash.opentelemetry.server.collector.Instrumentation;
 import io.mishmash.opentelemetry.server.collector.LogsCollector;
@@ -24,8 +30,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * 内嵌 collector-embedded 1.2.1 生命周期（详设 §1.2，T04）。
- * start：Vert.x HTTP 服务器绑定 observe.otlp.port（默认 4318），Traces/Metrics/Logs Collector
- * 经 Router 暴露 POST /v1/traces、/v1/metrics、/v1/logs（OTLP/JSON 与 protobuf 均可，T01 poc-notes §1）；
+ * start：Vert.x HTTP 服务器绑定 observe.otlp.port（默认 4318），请求先经
+ * T06 安全过滤器链 OtlpSecurityFilter（IP 白名单 403 → 限流 429 → 请求体上限 413，
+ * observe.security.*）再进入 Router；Traces/Metrics/Logs Collector 经 Router 暴露
+ * POST /v1/traces、/v1/metrics、/v1/logs（OTLP/JSON 与 protobuf 均可，T01 poc-notes §1）；
  * 仅启用 HTTP，不绑定 GrpcServer（gRPC 4317 不启用）。
  * stop：关闭 collector（含其 ForkJoinPool）、HTTP 服务器与 Vert.x（事件循环/worker 线程），
  * 应用关闭无端口泄漏。
@@ -41,9 +49,12 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
     private static final long OPERATION_TIMEOUT_SEC = 10;
 
     private final OtlpProperties otlpProperties;
+    private final SecurityFilterProperties securityProperties;
     private final SpansSubscriber spansSubscriber;
     private final MetricsSubscriber metricsSubscriber;
     private final LogsSubscriber logsSubscriber;
+    private final RejectedCounter rejectedCounter;
+    private final ObjectMapper objectMapper;
 
     private Vertx vertx;
     private HttpServer httpServer;
@@ -54,17 +65,25 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
 
     /**
      * subscriber 经构造注入（T05 为 Kafka 三 topic 写入订阅者 @Component）。
+     * T06 追加安全过滤器依赖（observe.security.* 属性、拒绝计数、统一响应序列化器）。
      * 测试：@MockitoBean 替换订阅者验证端到端投递（OtlpSubscriberDeliveryTest）；
      * ContextSafe* 覆写的失败分支由测试子类直接注入故障覆盖（ContextSafeCollectorBranchTest）。
      */
     public EmbeddedCollectorConfig(OtlpProperties otlpProperties,
+                                   SecurityFilterProperties securityProperties,
                                    SpansSubscriber spansSubscriber,
                                    MetricsSubscriber metricsSubscriber,
-                                   LogsSubscriber logsSubscriber) {
+                                   LogsSubscriber logsSubscriber,
+                                   RejectedCounter rejectedCounter,
+                                   ObjectMapper objectMapper) {
         this.otlpProperties = otlpProperties;
+        this.securityProperties = securityProperties;
         this.spansSubscriber = spansSubscriber;
         this.metricsSubscriber = metricsSubscriber;
         this.logsSubscriber = logsSubscriber;
+        this.rejectedCounter = rejectedCounter;
+        this.objectMapper = objectMapper;
+        securityProperties.validate();
     }
 
     @Override
@@ -83,7 +102,18 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
         tracesCollector.bind(router);
         metricsCollector.bind(router);
         logsCollector.bind(router);
-        httpServer = vertx.createHttpServer().requestHandler(router);
+        // T06：入口安全过滤器（白名单 403 → 限流 429 → 体积 413）挂在 Router 之前；
+        // 放行后由本过滤器以 router 为下游续链（router 本身即 Handler<HttpServerRequest>）
+        CidrMatcher cidrMatcher = CidrMatcher.of(securityProperties.getAllowedCidrs());
+        SlidingWindowRateLimiter rateLimiter =
+                new SlidingWindowRateLimiter(securityProperties.getRateLimitPerMin(), System::currentTimeMillis);
+        OtlpSecurityFilter securityFilter = new OtlpSecurityFilter(cidrMatcher,
+                rateLimiter,
+                securityProperties.getMaxRequestBytes(),
+                rejectedCounter,
+                objectMapper,
+                router);
+        httpServer = vertx.createHttpServer().requestHandler(securityFilter);
         try {
             await(httpServer.listen(otlpProperties.getPort()), "OTLP/HTTP listen");
         } catch (IllegalStateException e) {
