@@ -157,6 +157,8 @@ interface XhrLike {
   open: (...args: unknown[]) => void;
   send: (body?: unknown) => void;
   addEventListener?: (type: string, listener: EventListenerOrEventListenerObject) => void;
+  /** 真实 XHR 按引用移除——finish 自注销依赖此语义（T14 评审 Major-1） */
+  removeEventListener?: (type: string, listener: EventListenerOrEventListenerObject) => void;
   status?: number;
 }
 
@@ -244,7 +246,13 @@ export function installRestInstrumentation(deps: RestRecorderDeps): RestInstrume
           const method = m.method;
           const route = normalizeRoute(m.url);
           const startMs = nowMs(deps);
+          // finish 自注销：XHR 监听器跨 open/send 周期保留（规范），只增不删会使同实例
+          // 第 N 次 send 触发 N 个监听器 → N 个错配 span（T14 评审 Major-1 实证：
+          // 池化复用 XHR 污染 REST 时序）。自注销保证每次调用恰产生一个 span。
           const finish = () => {
+            if (typeof this.removeEventListener === 'function') {
+              this.removeEventListener('loadend', finish);
+            }
             recordRestSpan(deps, {
               method,
               route,

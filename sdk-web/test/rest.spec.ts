@@ -130,8 +130,13 @@ class FakeXHR {
     (this.listeners[type] ??= []).push(fn as () => void);
   }
 
-  removeEventListener(): void {
-    this.listeners = {};
+  // 按引用移除（对齐真实 XHR 语义——埋点 finish 自注销依赖此行为，T14 评审 Major-1）
+  removeEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
+    const fn = typeof listener === 'function' ? (listener as () => void) : listener.handleEvent.bind(listener);
+    const arr = this.listeners[type];
+    if (!arr) return;
+    const idx = arr.indexOf(fn as () => void);
+    if (idx >= 0) arr.splice(idx, 1);
   }
 
   open(method: string, url: string): void {
@@ -317,6 +322,32 @@ describe('T14 XHR 自动埋点', () => {
     for (const v of Object.values(rest!.attributes)) {
       expect(String(v)).not.toContain('PII-BODY');
     }
+    await h.client.shutdown();
+  });
+
+  it('同一 XHR 实例复用（两次 open/send）→ 恰 2 个 span 且 route 各自正确（Major-1 回归：监听器自注销）', async () => {
+    installFakeXHR(FakeXHR);
+    const h = makeClient();
+    h.client.signIn('C-1');
+    h.client.startBusiness('ORDER');
+
+    // 池化复用是 vue2 老宿主的真实模式：同实例先后发两个请求
+    const XHRCtor = (globalThis as unknown as { XMLHttpRequest: new () => FakeXHR }).XMLHttpRequest;
+    const xhr = new XHRCtor();
+    xhr.open('GET', 'https://api.test/api/one?x=1');
+    xhr.send();
+    await new Promise((r) => setTimeout(r, 20)); // 第一请求 loadend
+    xhr.open('POST', 'https://api.test/api/two');
+    xhr.send();
+    await new Promise((r) => setTimeout(r, 20)); // 第二请求 loadend
+
+    const rests = restSpans(h);
+    // 修复前：第二次 send 触发 2 个监听器 → 共 3 个 span（含旧 method/route + 新 status 的错配）
+    expect(rests).toHaveLength(2);
+    expect(rests[0].attributes[ATTR_HTTP_ROUTE]).toBe('/api/one');
+    expect(rests[0].attributes[ATTR_HTTP_REQUEST_METHOD]).toBe('GET');
+    expect(rests[1].attributes[ATTR_HTTP_ROUTE]).toBe('/api/two');
+    expect(rests[1].attributes[ATTR_HTTP_REQUEST_METHOD]).toBe('POST');
     await h.client.shutdown();
   });
 
