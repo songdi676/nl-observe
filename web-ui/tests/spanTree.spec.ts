@@ -111,6 +111,32 @@ describe('buildSpanTree：平铺 span 列表按 parentSpanId 组树', () => {
     expect(tree.map((n) => n.span.spanId)).toEqual(['x'])
   })
 
+  it('上游两两成环（A↔B）且另有 C→B：全部提根终止，不死循环（评审 Major-1/安全 F-1）', () => {
+    const a = span({ spanId: 'a', parentSpanId: 'b' })
+    const b = span({ spanId: 'b', parentSpanId: 'a' })
+    const c = span({ spanId: 'c', parentSpanId: 'b' })
+    const tree = buildSpanTree([a, b, c])
+    // C 的 parent 链进入不含自身的环——旧实现 while 同步死循环冻结标签页
+    expect(tree.map((n) => n.span.spanId).sort()).toEqual(['a', 'b', 'c'])
+    for (const n of tree) expect(n.children).toEqual([])
+  })
+
+  it('自环被他节点引用（X.parent=X, Y.parent=X）：均提根终止', () => {
+    const x = span({ spanId: 'x', parentSpanId: 'x' })
+    const y = span({ spanId: 'y', parentSpanId: 'x' })
+    const tree = buildSpanTree([x, y])
+    expect(tree.map((n) => n.span.spanId).sort()).toEqual(['x', 'y'])
+  })
+
+  it('重复 spanId：保留首个、忽略后续，不重复挂载（评审 m-5）', () => {
+    const first = span({ spanId: 'd', name: 'first' })
+    const second = span({ spanId: 'd', name: 'second' })
+    const tree = buildSpanTree([first, second])
+    expect(tree).toHaveLength(1)
+    expect(tree[0].span.name).toBe('first')
+    expect(tree[0].children).toEqual([])
+  })
+
   it('空列表 → 空树', () => {
     expect(buildSpanTree([])).toEqual([])
   })

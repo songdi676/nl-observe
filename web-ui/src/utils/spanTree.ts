@@ -38,11 +38,19 @@ function spanEnd(span: SpanNode): number {
  */
 export function buildSpanTree(spans: SpanNode[]): SpanTreeNode[] {
   const nodes = new Map<string, SpanTreeNode>()
+  const unique: SpanNode[] = []
   for (const span of spans) {
+    // 契约上 spanId 唯一；重复 id 保留首个并告警（后写覆盖会静默丢 span、
+    // 且同一节点被挂载两次——评审 m-5）
+    if (nodes.has(span.spanId)) {
+      console.warn(`buildSpanTree：重复 spanId ${span.spanId}，保留首个、忽略后续重复项`)
+      continue
+    }
     nodes.set(span.spanId, { span, children: [] })
+    unique.push(span)
   }
   const roots: SpanTreeNode[] = []
-  for (const span of spans) {
+  for (const span of unique) {
     const node = nodes.get(span.spanId) as SpanTreeNode
     const parent = span.parentSpanId ? nodes.get(span.parentSpanId) : undefined
     if (!parent || parent === node || isAncestorCycle(node, parent, nodes)) {
@@ -60,15 +68,22 @@ export function buildSpanTree(spans: SpanNode[]): SpanTreeNode[] {
   return roots
 }
 
-/** 沿 parent 链上溯，若回到自身则判为环（该 span 提根，避免渲染死循环） */
+/**
+ * 沿 parent 链上溯，遇到自身或已访问节点即判为环（该 span 提根，避免渲染死循环）。
+ * 仅识别"经过自身"的环不完整：链进入一个不含自身的上游环（A↔B，另有 C→B）时
+ * 上溯永不终止——评审 Major-1/安全 F-1（3 条畸形 span 即可冻结浏览器标签页）。
+ * visited-set 保证上溯步数 ≤ 节点数，任意畸形 parent 图均终止。
+ */
 function isAncestorCycle(
   node: SpanTreeNode,
   parent: SpanTreeNode,
   nodes: Map<string, SpanTreeNode>
 ): boolean {
+  const seen = new Set<SpanTreeNode>()
   let cur: SpanTreeNode | undefined = parent
   while (cur) {
-    if (cur === node) return true
+    if (cur === node || seen.has(cur)) return true
+    seen.add(cur)
     const pid: string = cur.span.parentSpanId
     cur = pid ? nodes.get(pid) : undefined
   }
@@ -96,7 +111,8 @@ export function isBusinessRootSpan(span: SpanNode): boolean {
   return span.name.startsWith(BIZ_BUSINESS_NAME_PREFIX)
 }
 
-/** REST span：属性含 http.* 白名单键（SDK autoprofile 仅写白名单 4 项） */
+/** REST span：属性含 http.* 白名单键（SDK autoprofile 仅写白名单 4 项；
+ *  判定只看 3 个 http.* 键，nl.duration_ms 仅作白名单展示——评审 n-3 点明分歧） */
 export function isRestSpan(span: SpanNode): boolean {
   const attrs = span.attributes ?? {}
   return (
@@ -128,7 +144,8 @@ export function barGeometry(
 
 /**
  * 挂起/恢复事件在 span 条内的百分比位置（相对 span 自身起止）。
- * 事件缺 time 或 span 时长为 0 → 0（贴条首）；无法解析 → null（不画标记）。
+ * 事件 time 缺失/无法解析 → null（渲染侧不画标记，评审 m-3：与"贴条首"语义区分）；
+ * 事件 time 有效但 span 时长为 0 → 0（贴条首）。
  */
 export function eventMarkerPct(event: SpanEvent | undefined, span: SpanNode): number | null {
   if (!event) return null

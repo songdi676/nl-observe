@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { SpanEvent, SpanNode } from '../api/types'
-import { REST_SPAN_WHITELIST, SPAN_ATTRIBUTE_KEYS, TIMELINE_EVENT_NAMES } from '../config/attributeKeys'
+import { SPAN_ATTRIBUTE_KEYS, TIMELINE_EVENT_NAMES } from '../config/attributeKeys'
 import {
   barGeometry,
   buildSpanTree,
@@ -33,13 +33,14 @@ const rows = computed<TimelineRow[]>(() => {
 
 const domain = computed(() => timelineDomain(props.spans))
 
-function markerEvents(span: SpanNode): SpanEvent[] {
-  return (span.events ?? []).filter((e) => TIMELINE_EVENT_NAMES.includes(e.name))
-}
-
-function markerLeft(ev: SpanEvent, span: SpanNode): string {
-  const pct = eventMarkerPct(ev, span)
-  return `${pct === null ? 0 : pct}%`
+/** 时间线事件标记：白名单事件名 + 位置可解析（time 缺失/非法 → null → 不渲染，
+ *  不得贴条首谎称发生在起点——评审 m-3） */
+function markerEvents(span: SpanNode): { ev: SpanEvent; left: string }[] {
+  return (span.events ?? [])
+    .filter((e) => TIMELINE_EVENT_NAMES.includes(e.name))
+    .map((ev) => ({ ev, pct: eventMarkerPct(ev, span) }))
+    .filter((m): m is { ev: SpanEvent; pct: number } => m.pct !== null)
+    .map((m) => ({ ev: m.ev, left: `${m.pct}%` }))
 }
 
 /** REST span 白名单属性摘要（method route · status · duration） */
@@ -62,7 +63,9 @@ function rowClass(span: SpanNode): Record<string, boolean> {
   return {
     'span-row--biz': isBusinessRootSpan(span),
     'span-row--rest': isRestSpan(span),
-    'span-row--error': span.statusCode !== 0
+    // 存储的是 OTLP Status code（0=UNSET,1=OK,2=ERROR，OtlpJsonParser 原样入库）；
+    // 按"非 0 即错"会把 OK(1) 染红、且真实数据恒 UNSET(0) 永不标红——评审 M-2
+    'span-row--error': span.statusCode === 2
   }
 }
 
@@ -100,20 +103,19 @@ const INDENT_PX = 18
             :style="barStyle(row.span)"
           >
             <span
-              v-for="ev in markerEvents(row.span)"
-              :key="`${row.span.spanId}-${ev.name}-${ev.time ?? ''}`"
+              v-for="m in markerEvents(row.span)"
+              :key="`${row.span.spanId}-${m.ev.name}-${m.ev.time ?? ''}`"
               class="event-marker"
-              :class="`event-marker--${ev.name.replace(/\./g, '-')}`"
-              :data-event-name="ev.name"
-              :style="{ left: markerLeft(ev, row.span) }"
-              :title="`${ev.name}${ev.time ? ` @ ${ev.time}` : ''}`"
+              :class="`event-marker--${m.ev.name.replace(/\./g, '-')}`"
+              :data-event-name="m.ev.name"
+              :style="{ left: m.left }"
+              :title="`${m.ev.name}${m.ev.time ? ` @ ${m.ev.time}` : ''}`"
             />
           </span>
         </span>
         <span
           v-if="isRestSpan(row.span)"
           class="rest-summary"
-          :data-whitelist-keys="REST_SPAN_WHITELIST.join(',')"
         >
           {{ restSummary(row.span) }}
         </span>
@@ -182,6 +184,10 @@ const INDENT_PX = 18
 .event-marker--biz-resume {
   background: #15803d;
 }
+/* 挂起标记显式声明（评审 n-1：动态修饰类不得只定义一半；与基色一致=琥珀） */
+.event-marker--biz-suspend-start {
+  background: #b45309;
+}
 .rest-summary {
   color: #047857;
   font-size: 12px;
@@ -191,6 +197,8 @@ const INDENT_PX = 18
   color: #64748b;
   font-size: 12px;
   text-align: right;
+  /* 非 REST 行缺 rest-summary 子元素，显式钉第 4 列保证耗时列对齐（评审 m-2） */
+  grid-column: 4;
 }
 .empty {
   color: #64748b;

@@ -18,18 +18,25 @@ const loading = ref(false)
 const error = ref('')
 const selected = ref<SpanNode | null>(null)
 
+// 陈旧响应防护（评审 m-1）：traceId/customerId 快速切换时，旧 trace 的在途
+// 响应不得覆盖新 trace 的时间线
+let loadSeq = 0
 async function load(): Promise<void> {
+  const seq = ++loadSeq
   selected.value = null
   tree.value = null
   error.value = ''
   if (!traceId.value || !customerId.value) return
   loading.value = true
   try {
-    tree.value = await api.value.getTrace(customerId.value, traceId.value)
+    const got = await api.value.getTrace(customerId.value, traceId.value)
+    if (seq !== loadSeq) return
+    tree.value = got
   } catch (e) {
+    if (seq !== loadSeq) return
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

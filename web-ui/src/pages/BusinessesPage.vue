@@ -16,16 +16,20 @@ const items = ref<BusinessItem[]>([])
 const loading = ref(false)
 const error = ref('')
 const searched = ref(false)
+/** 查询时的 customerId 快照（评审 Nit）：结果行的链接不得随输入框后续改动漂移 */
+const lastCustomer = ref('')
 
-/** from/to/customerId 必填（详设 §2.1：缺参后端 40001），空则禁用以避免无效请求 */
+/** from/to/customerId 必填（详设 §2.1：缺参后端 40001），空则禁用以避免无效请求；
+ *  loading 期间禁用防重复提交（评审 m-1：双击后到者覆盖） */
 const canQuery = computed(
   () => customerId.value !== '' && from.value !== '' && to.value !== ''
 )
 
 async function query(): Promise<void> {
-  if (!canQuery.value) return
+  if (!canQuery.value || loading.value) return
   loading.value = true
   error.value = ''
+  lastCustomer.value = customerId.value
   try {
     items.value = await api.value.listBusinesses(customerId.value, {
       from: from.value,
@@ -42,7 +46,12 @@ async function query(): Promise<void> {
 }
 
 function traceLink(item: BusinessItem): { path: string; query: Record<string, string> } {
-  return { path: `/traces/${item.traceId}`, query: { customer: customerId.value } }
+  // traceId 进 path 前编码（评审安全 F-2）：含 ?/#// 的畸形 traceId 不得破坏 href 结构；
+  // vue-router 取参自动解码，接收端再经 API 层 encodeURIComponent，口径与 observeApi 一致
+  return {
+    path: `/traces/${encodeURIComponent(item.traceId)}`,
+    query: { customer: lastCustomer.value }
+  }
 }
 </script>
 
@@ -88,7 +97,7 @@ function traceLink(item: BusinessItem): { path: string; query: Record<string, st
       <button
         type="submit"
         class="query-btn"
-        :disabled="!canQuery"
+        :disabled="!canQuery || loading"
       >
         查询
       </button>

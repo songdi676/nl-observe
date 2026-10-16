@@ -125,4 +125,47 @@ describe('BusinessesPage：客户编号+时间范围+bizCode 过滤查询业务�
     const { wrapper } = await mountPage()
     expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
   })
+
+  it('畸形 traceId（含 ? 与 /）：链接 path 编码，不破坏 href 结构（评审安全 F-2）', async () => {
+    server.use(
+      http.get(`${BASE}/customers/:customerId/businesses`, () =>
+        HttpResponse.json({
+          code: 0,
+          message: 'ok',
+          data: [
+            {
+              bizId: 'b-900',
+              bizCode: 'ORDER',
+              traceId: 'aaa?bbb/ccc',
+              startTime: '2026-09-28T09:00:00.000Z',
+              effectiveDurationMs: 1000,
+              status: 'success',
+              endReason: 'explicit'
+            }
+          ]
+        })
+      )
+    )
+    const { wrapper } = await mountPage()
+    await fillAndSubmit(wrapper)
+    const link = wrapper.get('tr[data-biz-id="b-900"] a')
+    // path 段整体 percent-encode，?customer= 保持唯一 query
+    expect(link.attributes('href')).toBe('/traces/aaa%3Fbbb%2Fccc?customer=c-001')
+  })
+
+  it('查询期间输入框改动 customerId：结果行链接 customer 不漂移（评审 Nit）', async () => {
+    server.use(
+      http.get(`${BASE}/customers/:customerId/businesses`, () =>
+        HttpResponse.json({ code: 0, message: 'ok', data: businessFixture })
+      )
+    )
+    const { wrapper } = await mountPage()
+    await fillAndSubmit(wrapper)
+    // 查询后改动输入框（不重新查询）
+    await wrapper.find('input[name="customerId"]').setValue('c-999')
+    const link = wrapper.get('tr[data-biz-id="b-001"] a')
+    expect(link.attributes('href')).toBe(
+      '/traces/4bf92f3577b34da6a3ce929d0e0e4736?customer=c-001'
+    )
+  })
 })
