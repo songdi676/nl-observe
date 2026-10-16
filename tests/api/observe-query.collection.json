@@ -1,9 +1,9 @@
 {
   "info": {
     "_postman_id": "b7f3a2c1-9d4e-4a6b-8c2f-7d1e0a9c4b32",
-    "name": "nl-observe query API（T10：业务列表 / span 树 / span 详情）",
+    "name": "nl-observe query API（T10：业务列表 / span 树 / span 详情；T11：metrics 汇总）",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "详设 §2.1/§2.2/§2.3 三端点正常+异常用例（Newman 执行）。\n\n前置：目标环境已按预置数据灌入（客户 {{customerId}} 在 [{{from}},{{to}}] 窗口内至少 1 个业务 root span，且存在 trace {{traceId}} / span {{spanId}}）。\n\n运行：newman run tests/api/observe-query.collection.json -e <env.json>\n可覆盖变量：baseUrl（默认 http://localhost:8081）、customerId、traceId、spanId、from、to、bizCode、emptyCustomerId、emptyTraceId、emptySpanId。\n\n断言口径：统一 {code,message,data}（§4.1）；参数错误 400/40001；无数据 404/40401。"
+    "description": "详设 §2.1/§2.2/§2.3/§2.4 四端点正常+异常用例（Newman 执行）。\n\n前置：目标环境已按预置数据灌入（客户 {{customerId}} 在 [{{from}},{{to}}] 窗口内至少 1 个业务 root span，且存在 trace {{traceId}} / span {{spanId}}；metrics-summary 用例另需 {{customerId}} 在 [{{metricsFrom}},{{metricsTo}}] 窗口内 ≥1 个 nl.first_screen_load 指标数据点与业务 root span）。\n\n运行：newman run tests/api/observe-query.collection.json -e <env.json>\n可覆盖变量：baseUrl（默认 http://localhost:8081）、customerId、traceId、spanId、from、to、bizCode、metricsFrom、metricsTo、emptyCustomerId、emptyTraceId、emptySpanId。\n\n断言口径：统一 {code,message,data}（§4.1）；参数错误 400/40001；无数据 404/40401；运维视图（不带 customerId）限流 429/42901（60 次/分，该用例最后执行，会排空限流窗口配额）。\n\n注：metrics-summary 运维视图超频用例连续发起 61 次请求，共享环境下可能影响其他运维视图调用方（60s 窗口内）。"
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8081", "type": "string" },
@@ -13,6 +13,8 @@
     { "key": "from", "value": "2026-09-01", "type": "string" },
     { "key": "to", "value": "2026-09-30", "type": "string" },
     { "key": "bizCode", "value": "ORDER", "type": "string" },
+    { "key": "metricsFrom", "value": "2026-08-01", "type": "string" },
+    { "key": "metricsTo", "value": "2026-08-31", "type": "string" },
     { "key": "emptyCustomerId", "value": "c-no-such-customer", "type": "string" },
     { "key": "emptyTraceId", "value": "ffffffffffffffffffffffffffffffff", "type": "string" },
     { "key": "emptySpanId", "value": "ffffffffffffffff", "type": "string" }
@@ -433,6 +435,302 @@
               "path": ["api", "observe", "customers", "{{customerId}}", "traces", "{{emptyTraceId}}", "spans", "{{spanId}}"]
             },
             "description": "(customerId, traceId, spanId) 三元组精确匹配：span 存在但 trace 不符 → 40401。"
+          }
+        }
+      ]
+    },
+    {
+      "name": "metrics-summary（§2.4 指标汇总）",
+      "item": [
+        {
+          "name": "正常：customerId 指定（客户作用域）→ 200 code=0，firstScreenLoadP95 + perBiz 完整",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('统一响应 {code,message,data}', () => {",
+                  "  pm.expect(body).to.have.property('code');",
+                  "  pm.expect(body).to.have.property('message');",
+                  "  pm.expect(body).to.have.property('data');",
+                  "});",
+                  "pm.test('code=0', () => pm.expect(body.code).to.eql(0));",
+                  "pm.test('data.firstScreenLoadP95 为数值（quantile(0.95)，详设 §2.4）', () => {",
+                  "  pm.expect(body.data).to.have.property('firstScreenLoadP95');",
+                  "  pm.expect(body.data.firstScreenLoadP95).to.be.a('number');",
+                  "});",
+                  "pm.test('data.perBiz 数组元素含 bizCode/effectiveDurationP95/successRate/count', () => {",
+                  "  pm.expect(body.data.perBiz).to.be.an('array');",
+                  "  for (const m of body.data.perBiz) {",
+                  "    pm.expect(m).to.have.property('bizCode');",
+                  "    pm.expect(m.effectiveDurationP95).to.be.a('number');",
+                  "    pm.expect(m.successRate).to.be.a('number');",
+                  "    pm.expect(m.successRate).to.satisfy(v => v >= 0 && v <= 1);",
+                  "    pm.expect(m.count).to.be.a('number');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/metrics/summary?from={{metricsFrom}}&to={{metricsTo}}&customerId={{customerId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "metrics", "summary"],
+              "query": [
+                { "key": "from", "value": "{{metricsFrom}}" },
+                { "key": "to", "value": "{{metricsTo}}" },
+                { "key": "customerId", "value": "{{customerId}}" }
+              ]
+            },
+            "description": "详设 §2.4：customerId 指定 → 客户作用域，不限流；firstScreenLoadP95=quantile(0.95)(nl.first_screen_load)。"
+          }
+        },
+        {
+          "name": "正常：bizCode 过滤 → 200 code=0，perBiz 仅命中该 bizCode",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('code=0', () => pm.expect(body.code).to.eql(0));",
+                  "pm.test('perBiz 非空且全部命中 bizCode', () => {",
+                  "  pm.expect(body.data.perBiz.length).to.be.above(0);",
+                  "  for (const m of body.data.perBiz) { pm.expect(m.bizCode).to.eql(pm.variables.get('bizCode')); }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/metrics/summary?from={{metricsFrom}}&to={{metricsTo}}&customerId={{customerId}}&bizCode={{bizCode}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "metrics", "summary"],
+              "query": [
+                { "key": "from", "value": "{{metricsFrom}}" },
+                { "key": "to", "value": "{{metricsTo}}" },
+                { "key": "customerId", "value": "{{customerId}}" },
+                { "key": "bizCode", "value": "{{bizCode}}" }
+              ]
+            },
+            "description": "哨兵过滤（'' = :bizCode OR biz_code = :bizCode）：指定 bizCode 时 perBiz 仅含该业务。"
+          }
+        },
+        {
+          "name": "正常：不带 customerId（跨客户运维视图）→ 200 code=0（占 60 次/分配额 1 次）",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('code=0', () => pm.expect(body.code).to.eql(0));",
+                  "pm.test('data.firstScreenLoadP95 为数值（跨客户合并口径）', () => pm.expect(body.data.firstScreenLoadP95).to.be.a('number'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/metrics/summary?from={{metricsFrom}}&to={{metricsTo}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "metrics", "summary"],
+              "query": [
+                { "key": "from", "value": "{{metricsFrom}}" },
+                { "key": "to", "value": "{{metricsTo}}" }
+              ]
+            },
+            "description": "customerId 缺省 = 跨客户运维视图（详设 §2.4），计入限流桶。"
+          }
+        },
+        {
+          "name": "异常：缺 from → 400 code=40001",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('code=40001', () => pm.expect(pm.response.json().code).to.eql(40001));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/metrics/summary?to={{metricsTo}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "metrics", "summary"],
+              "query": [{ "key": "to", "value": "{{metricsTo}}" }]
+            },
+            "description": "from 必填（详设 §1.4）。"
+          }
+        },
+        {
+          "name": "异常：缺 to → 400 code=40001",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('code=40001', () => pm.expect(pm.response.json().code).to.eql(40001));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/metrics/summary?from={{metricsFrom}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "metrics", "summary"],
+              "query": [{ "key": "from", "value": "{{metricsFrom}}" }]
+            },
+            "description": "to 必填（详设 §1.4）。"
+          }
+        },
+        {
+          "name": "异常：跨度 >31 天 → 400 code=40001",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('code=40001', () => pm.expect(pm.response.json().code).to.eql(40001));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/metrics/summary?from=2026-07-01&to=2026-08-02",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "metrics", "summary"],
+              "query": [
+                { "key": "from", "value": "2026-07-01" },
+                { "key": "to", "value": "2026-08-02" }
+              ]
+            },
+            "description": "33 天窗口 > MAX_SPAN_DAYS=31 → 40001。"
+          }
+        },
+        {
+          "name": "异常：无数据（未知客户）→ 404 code=40401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('code=40401', () => pm.expect(pm.response.json().code).to.eql(40401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/metrics/summary?from={{metricsFrom}}&to={{metricsTo}}&customerId={{emptyCustomerId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "metrics", "summary"],
+              "query": [
+                { "key": "from", "value": "{{metricsFrom}}" },
+                { "key": "to", "value": "{{metricsTo}}" },
+                { "key": "customerId", "value": "{{emptyCustomerId}}" }
+              ]
+            },
+            "description": "客户窗口内无指标/业务数据 → 40401（详设 §4.1）。"
+          }
+        },
+        {
+          "name": "异常：运维视图超频（61 次）→ 至少一次 429 code=42901（本组最后执行，会排空限流窗口）",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// 异步超频用例（Postman/Newman done 回调口径：断言须在 done() 前完成）：",
+                  "// 外层请求已占 1 次配额，脚本内再连续 61 次运维视图（不带 customerId）调用：",
+                  "// 60 次/分限流桶必现 429，且首个 429 之后同一固定窗口内全部拒绝。",
+                  "const TOTAL = 61;",
+                  "const url = pm.variables.get('baseUrl') + '/api/observe/metrics/summary?from=' + pm.variables.get('metricsFrom') + '&to=' + pm.variables.get('metricsTo');",
+                  "pm.test('运维视图连续 61 次调用触发限流（60 次/分 → 429/42901）', (done) => {",
+                  "  const statuses = [];",
+                  "  let firstLimitedBody = null;",
+                  "  function run(i) {",
+                  "    if (i === TOTAL) {",
+                  "      try {",
+                  "        const first = statuses.indexOf(429);",
+                  "        pm.expect(first, '61 次内未出现 429：' + JSON.stringify(statuses)).to.satisfy(v => v >= 0 && v <= 60);",
+                  "        for (const s of statuses.slice(first)) { pm.expect(s).to.eql(429); }",
+                  "        pm.test('429 响应体统一契约 code=42901（详设 §4.1）', () => {",
+                  "          pm.expect(firstLimitedBody, '未捕获 429 响应体').to.not.be.null;",
+                  "          pm.expect(firstLimitedBody.code).to.eql(42901);",
+                  "        });",
+                  "      } finally {",
+                  "        done();",
+                  "      }",
+                  "      return;",
+                  "    }",
+                  "    pm.sendRequest({ url: url, method: 'GET' }, (err, res) => {",
+                  "      if (err || !res) { statuses.push(0); }",
+                  "      else {",
+                  "        statuses.push(res.code);",
+                  "        if (res.code === 429 && firstLimitedBody === null) {",
+                  "          try { firstLimitedBody = res.json(); } catch (e) { firstLimitedBody = {}; }",
+                  "        }",
+                  "      }",
+                  "      run(i + 1);",
+                  "    });",
+                  "  }",
+                  "  run(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/observe/metrics/summary?from={{metricsFrom}}&to={{metricsTo}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "observe", "metrics", "summary"],
+              "query": [
+                { "key": "from", "value": "{{metricsFrom}}" },
+                { "key": "to", "value": "{{metricsTo}}" }
+              ]
+            },
+            "description": "运维视图限流（详设 §2.4/§4.1：42901/429）。注意：本用例排空 60s 限流窗口，共享环境执行后 1 分钟内其他运维视图调用会收到 429。"
           }
         }
       ]
