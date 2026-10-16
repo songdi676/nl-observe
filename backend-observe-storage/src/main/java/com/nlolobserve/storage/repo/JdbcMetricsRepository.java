@@ -8,6 +8,8 @@ import com.nlolobserve.common.ddl.Columns;
 import com.nlolobserve.common.ddl.TableNames;
 import com.nlolobserve.storage.parse.MetricRow;
 import com.nlolobserve.storage.parse.OtlpJsonParser;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
@@ -21,10 +23,13 @@ import org.springframework.stereotype.Repository;
  * 同一 data point 重复上报折叠（详设 §3）。
  * Databend 方言（v1.2.881 实测）：REPLACE INTO 必须显式 {@code ON (去重键)} 子句
  * （键 = 聚簇键），否则解析失败；ON 键上的重复行被整行替换。
- * 写入失败抛异常由消费端重试/跳过。
+ * 失败语义（T08 评审 F-1）：解析失败按记录粒度隔离（error 日志 + 跳过该条）；仅写库失败
+ * 抛异常由消费端重试/跳过。
  */
 @Repository
 public class JdbcMetricsRepository implements MetricsRepository {
+
+    private static final Logger LOG = LoggerFactory.getLogger(JdbcMetricsRepository.class);
 
     /** 去重身份键 = 聚簇键（DdlScripts OTEL_METRICS CLUSTER BY，详设 §3） */
     static final String DEDUP_KEY = "(" + Columns.METRICS_CUSTOMER_ID + ", "
@@ -55,9 +60,19 @@ public class JdbcMetricsRepository implements MetricsRepository {
 
     @Override
     public void write(List<String> payloads) {
+        // 解析失败按记录粒度隔离（T08 评审 F-1，口径同 JdbcSpansRepository）
         List<MetricRow> rows = new ArrayList<>(payloads.size());
-        for (String payload : payloads) {
-            rows.addAll(parser.parseMetrics(payload));
+        int dropped = 0;
+        for (int i = 0; i < payloads.size(); i++) {
+            try {
+                rows.addAll(parser.parseMetrics(payloads.get(i)));
+            } catch (RuntimeException e) {
+                dropped++;
+                LOG.error("metrics 载荷[{}] 解析失败，跳过该条（不重试，防毒丸卡死分区）", i, e);
+            }
+        }
+        if (dropped > 0) {
+            LOG.warn("metrics 批解析隔离 {} 条坏载荷 / 共 {} 条", dropped, payloads.size());
         }
         if (rows.isEmpty()) {
             return;

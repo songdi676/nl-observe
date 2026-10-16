@@ -23,6 +23,9 @@ class OtlpJsonParserTest {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
 
+    private static final TypeReference<List<Map<String, Object>>> LIST_TYPE = new TypeReference<>() {
+    };
+
     private final ObjectMapper mapper = new ObjectMapper();
     private final OtlpJsonParser parser = new OtlpJsonParser(mapper);
 
@@ -156,6 +159,94 @@ class OtlpJsonParserTest {
         assertThat(other.rowHash()).isNotEqualTo(row.rowHash());
     }
 
+    // ---- T10 契约：events_json 写路径（T08 评审 Major：events 不得解析后丢弃） ----
+
+    @Test
+    void parseSpans_eventsSerializedToQueryNativeFormat() throws Exception {
+        String json = OtlpFixtures.spanEnvelopeWithEvents(OtlpFixtures.TRACE_ID, OtlpFixtures.SPAN_ID,
+                "biz.business.ORDER", OtlpFixtures.bizRootAttributes(), OtlpFixtures.bizEvents());
+        SpanRow row = parser.parseSpans(json).get(0);
+
+        List<Map<String, Object>> events = mapper.readValue(row.eventsJson(), LIST_TYPE);
+        assertThat(events).hasSize(2);
+        // 契约形态：{"name":"...","time":"ISO-8601 UTC","attributes":{扁平键值}}
+        assertThat(events.get(0)).containsEntry("name", "biz.suspend_start")
+                .containsEntry("time", "2025-10-15T07:20:01Z");
+        assertThat(asMap(events.get(0).get("attributes"))).containsEntry("biz.biz_id", "b-1");
+        assertThat(events.get(1)).containsEntry("name", "biz.resume")
+                .containsEntry("time", "2025-10-15T07:20:02Z");
+        assertThat(asMap(events.get(1).get("attributes"))).isEmpty();
+    }
+
+    @Test
+    void parseSpans_noEvents_yieldsEmptyArray() {
+        SpanRow row = parser.parseSpans(OtlpFixtures.sampleSpans()).get(0);
+        assertThat(row.eventsJson()).isEqualTo("[]");
+    }
+
+    // ---- T08 评审 F-2：显式 JSON null 字段归一为空，不得 NPE ----
+
+    @Test
+    void parseSpans_explicitNullFields_normalizedToEmpty() {
+        String json = "{\"resourceSpans\":[{\"resource\":null,\"scopeSpans\":[{\"scope\":null,"
+                + "\"spans\":[{\"traceId\":\"" + OtlpFixtures.TRACE_ID + "\","
+                + "\"spanId\":\"" + OtlpFixtures.SPAN_ID + "\",\"name\":\"n\",\"kind\":1,"
+                + "\"startTimeUnixNano\":\"1760512800000000000\","
+                + "\"endTimeUnixNano\":\"1760512803000000000\","
+                + "\"attributes\":null,\"events\":null,\"status\":null}]}]}]}";
+        SpanRow row = parser.parseSpans(json).get(0);
+        assertThat(row.customerId()).isEmpty();
+        assertThat(row.attributesJson()).isEqualTo("{}");
+        assertThat(row.scopeJson()).isEqualTo("{}");
+        assertThat(row.eventsJson()).isEqualTo("[]");
+        assertThat(row.statusCode()).isZero();
+    }
+
+    @Test
+    void parseSpans_nullPayloadAndNullLists_noThrow() {
+        assertThat(parser.parseSpans("null")).isEmpty();
+        assertThat(parser.parseSpans("{\"resourceSpans\":[{\"resource\":null,\"scopeSpans\":null}]}")).isEmpty();
+    }
+
+    @Test
+    void parseMetrics_explicitNulls_noThrow() {
+        String json = "{\"resourceMetrics\":[{\"resource\":null,\"scopeMetrics\":[{\"metrics\":["
+                + "{\"name\":\"m\",\"gauge\":{\"dataPoints\":null}}]}]}]}";
+        assertThat(parser.parseMetrics(json)).isEmpty();
+        assertThat(parser.parseMetrics("null")).isEmpty();
+    }
+
+    @Test
+    void parseLogs_explicitNulls_noThrow() {
+        String json = "{\"resourceLogs\":[{\"resource\":null,\"scopeLogs\":[{\"logRecords\":[{"
+                + "\"timeUnixNano\":\"1760512805000000000\",\"body\":null,\"attributes\":null,"
+                + "\"severityText\":null}]}]}]}";
+        LogRow row = parser.parseLogs(json).get(0);
+        assertThat(row.body()).isEmpty();
+        assertThat(row.attributesJson()).isEqualTo("{}");
+    }
+
+    // ---- T08 评审 F-4：哈希字段边界不可被内容伪造（长度前缀编码） ----
+
+    @Test
+    void dpHash_delimiterAmbiguity_notCollided() {
+        // 旧规范化口径下两串相同（"a=b\u001fc=d"）→ 可构造碰撞劫持 REPLACE INTO 他行（F-4 反例）
+        String attrAmbiguous = "[{\"key\":\"a\",\"value\":{\"stringValue\":\"b\\u001fc=d\"}}]";
+        String attrTwoEntries = "[{\"key\":\"a\",\"value\":{\"stringValue\":\"b\"}},"
+                + "{\"key\":\"c\",\"value\":{\"stringValue\":\"d\"}}]";
+        MetricRow x = parser.parseMetrics(gauge("m", "1760512802000000000", 1.0, attrAmbiguous)).get(0);
+        MetricRow y = parser.parseMetrics(gauge("m", "1760512802000000000", 1.0, attrTwoEntries)).get(0);
+        assertThat(x.dpHash()).isNotEqualTo(y.dpHash());
+    }
+
+    @Test
+    void dpHash_includesServiceName_sameDataPointDifferentServiceNotFolded() {
+        // 评审 Minor：dp_hash 不含 resource 身份 → 同客户多 service 相同 data point 静默折叠
+        MetricRow a = parser.parseMetrics(gaugeWithService("svc-a")).get(0);
+        MetricRow b = parser.parseMetrics(gaugeWithService("svc-b")).get(0);
+        assertThat(a.dpHash()).isNotEqualTo(b.dpHash());
+    }
+
     @Test
     void parseSpans_invalidJson_throwsIllegalArgument() {
         assertThatThrownBy(() -> parser.parseSpans("{not-json"))
@@ -170,5 +261,20 @@ class OtlpJsonParserTest {
 
     private static String gauge(String metricName, String timeNano, double value, String dpAttributes) {
         return OtlpFixtures.gaugeMetricEnvelope(metricName, timeNano, value, dpAttributes);
+    }
+
+    /** 单 gauge data point 信封（resource 带 service.name，供 dp_hash service 身份用例）。 */
+    private static String gaugeWithService(String serviceName) {
+        return "{\"resourceMetrics\":[{\"resource\":{\"attributes\":["
+                + "{\"key\":\"nl.customer_id\",\"value\":{\"stringValue\":\"c-1\"}},"
+                + "{\"key\":\"service.name\",\"value\":{\"stringValue\":\"" + serviceName + "\"}}]},"
+                + "\"scopeMetrics\":[{\"scope\":{\"name\":\"nl-observe\"},\"metrics\":[{"
+                + "\"name\":\"m\",\"gauge\":{\"dataPoints\":[{"
+                + "\"attributes\":[],\"timeUnixNano\":\"1760512802000000000\",\"asDouble\":1.0}]}}]}]}]}]}";
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> asMap(Object value) {
+        return (Map<String, Object>) value;
     }
 }

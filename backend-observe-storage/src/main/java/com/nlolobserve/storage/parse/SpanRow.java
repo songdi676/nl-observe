@@ -25,5 +25,7 @@ public record SpanRow(
         double effectiveDurationMs,
         String resourceJson,
         String scopeJson,
-        String attributesJson) {
+        String attributesJson,
+        /** events_json（T10 契约，DdlScripts.OTEL_SPANS 注释）：查询端原生形态 JSON，无事件 '[]' */
+        String eventsJson) {
 }

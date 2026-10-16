@@ -11,9 +11,9 @@ public final class OtlpFixtures {
     public static final String TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
     /** 16 位 hex */
     public static final String SPAN_ID = "00f067aa0ba902b7";
-    /** 2025-10-15T10:00:00Z */
+    /** 2025-10-15T07:20:00Z（epoch 1760512800） */
     public static final long START_NANO = 1_760_512_800_000_000_000L;
-    /** 2025-10-15T10:00:03Z */
+    /** 2025-10-15T07:20:03Z */
     public static final long END_NANO = 1_760_512_803_000_000_000L;
 
     private OtlpFixtures() {
@@ -21,6 +21,12 @@ public final class OtlpFixtures {
 
     /** 单 span 信封（resource: nl.customer_id/service.name；scope: nl-observe；status code=1）。 */
     public static String spanEnvelope(String traceId, String spanId, String name, String spanAttributes) {
+        return spanEnvelopeWithEvents(traceId, spanId, name, spanAttributes, "[]");
+    }
+
+    /** 单 span 信封（含 events，OTLP 接收端形态：timeUnixNano 字符串 + KeyValue attributes）。 */
+    public static String spanEnvelopeWithEvents(String traceId, String spanId, String name,
+                                                String spanAttributes, String events) {
         return "{\"resourceSpans\":[{\"resource\":{\"attributes\":["
                 + "{\"key\":\"nl.customer_id\",\"value\":{\"stringValue\":\"c-1\"}},"
                 + "{\"key\":\"service.name\",\"value\":{\"stringValue\":\"shop-web\"}}]},"
@@ -30,7 +36,22 @@ public final class OtlpFixtures {
                 + "\"startTimeUnixNano\":\"" + START_NANO + "\","
                 + "\"endTimeUnixNano\":\"" + END_NANO + "\","
                 + "\"attributes\":" + spanAttributes + ","
+                + "\"events\":" + events + ","
                 + "\"status\":{\"code\":1}}]}]}]}";
+    }
+
+    /**
+     * 业务 span events 样例（T10/T13 口径：biz.suspend_start 带 biz.biz_id 属性、biz.resume 无属性）：
+     * 2025-10-15T07:20:01Z / 07:20:02Z（START_NANO +1s/+2s）。
+     */
+    public static String bizEvents() {
+        return "["
+                + "{\"timeUnixNano\":\"" + (START_NANO + 1_000_000_000L) + "\","
+                + "\"name\":\"biz.suspend_start\","
+                + "\"attributes\":[{\"key\":\"biz.biz_id\",\"value\":{\"stringValue\":\"b-1\"}}]},"
+                + "{\"timeUnixNano\":\"" + (START_NANO + 2_000_000_000L) + "\","
+                + "\"name\":\"biz.resume\",\"attributes\":[]}"
+                + "]";
     }
 
     /** 业务 root span 属性（T12 口径：biz.* 结束属性齐全）。 */

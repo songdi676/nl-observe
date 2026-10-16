@@ -10,6 +10,7 @@ import java.util.Map;
 
 import javax.sql.DataSource;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nlolobserve.common.ddl.DdlScripts;
 import com.nlolobserve.storage.config.DatabendDataSourceConfig;
@@ -142,6 +143,30 @@ class StorageDatabendIntegrationTest {
         assertThat(logs).hasSize(1);
         assertThat(logs.get(0).get("row_hash")).asString().isNotBlank();
         assertThat(logs.get(0).get("body")).isEqualTo("user logged in");
+    }
+
+    @Test
+    void spanEvents_roundTripThroughEventsJsonColumn() throws Exception {
+        // T10 契约端到端（T08 评审 Major 闭环）：OTLP events → events_json 落列 → 查询端可解析
+        spansRepository.write(List.of(OtlpFixtures.spanEnvelopeWithEvents(OtlpFixtures.TRACE_ID,
+                OtlpFixtures.SPAN_ID, "biz.business.ORDER", OtlpFixtures.bizRootAttributes(),
+                OtlpFixtures.bizEvents())));
+
+        String eventsJson = jdbc.queryForObject("SELECT events_json FROM otel_spans", String.class);
+        List<Map<String, Object>> events =
+                new ObjectMapper().readValue(eventsJson, new TypeReference<>() {
+                });
+        assertThat(events).hasSize(2);
+        assertThat(events.get(0)).containsEntry("name", "biz.suspend_start")
+                .containsEntry("time", "2025-10-15T07:20:01Z");
+        assertThat(events.get(1)).containsEntry("name", "biz.resume");
+
+        // 无事件 span 以同身份键 REPLACE 覆盖 → events_json 回到 '[]'（列缺省同值）
+        spansRepository.write(List.of(OtlpFixtures.sampleSpans()));
+        String replaced = jdbc.queryForObject(
+                "SELECT events_json FROM otel_spans FINAL WHERE trace_id = ?", String.class,
+                OtlpFixtures.TRACE_ID);
+        assertThat(replaced).isEqualTo("[]");
     }
 
     @Test

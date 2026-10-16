@@ -50,6 +50,9 @@ class JdbcSpansRepositoryTest {
                 .contains(":customerId")
                 .contains(":traceId")
                 .contains(":spanId")
+                // T10 契约：events_json 必须落列（缺列则查询端 events 恒空、T19 不可达）
+                .contains("events_json")
+                .contains(":eventsJson")
                 .doesNotContain(OtlpFixtures.TRACE_ID)
                 .doesNotContain("c-1");
 
@@ -63,6 +66,42 @@ class JdbcSpansRepositoryTest {
                 .isEqualTo(Timestamp.from(Instant.ofEpochSecond(1_760_512_800)));
         assertThat(params.getValue("endTime"))
                 .isEqualTo(Timestamp.from(Instant.ofEpochSecond(1_760_512_803)));
+        assertThat(params.getValue("eventsJson")).isEqualTo("[]");
+    }
+
+    @Test
+    void write_spanWithEvents_bindsQueryNativeEventsJson() {
+        when(namedJdbc.batchUpdate(anyString(), any(SqlParameterSource[].class))).thenReturn(new int[]{1});
+        repository.write(List.of(OtlpFixtures.spanEnvelopeWithEvents(OtlpFixtures.TRACE_ID,
+                OtlpFixtures.SPAN_ID, "biz.business.ORDER", OtlpFixtures.bizRootAttributes(),
+                OtlpFixtures.bizEvents())));
+
+        ArgumentCaptor<SqlParameterSource[]> sourcesCaptor = ArgumentCaptor.forClass(SqlParameterSource[].class);
+        verify(namedJdbc).batchUpdate(anyString(), sourcesCaptor.capture());
+        MapSqlParameterSource params = (MapSqlParameterSource) sourcesCaptor.getValue()[0];
+        String eventsJson = (String) params.getValue("eventsJson");
+        assertThat(eventsJson)
+                .contains("\"name\":\"biz.suspend_start\"")
+                .contains("\"time\":\"2025-10-15T07:20:01Z\"")
+                .contains("\"biz.biz_id\":\"b-1\"")
+                .contains("\"name\":\"biz.resume\"");
+    }
+
+    @Test
+    void write_malformedPayload_isolatedPerRecord_othersStillWritten() {
+        // T08 评审 F-1：单条永久坏载荷只丢自己，不抛异常、不拖累同批其余记录
+        when(namedJdbc.batchUpdate(anyString(), any(SqlParameterSource[].class))).thenReturn(new int[]{1});
+        repository.write(List.of("{not-json", OtlpFixtures.sampleSpans()));
+
+        ArgumentCaptor<SqlParameterSource[]> captor = ArgumentCaptor.forClass(SqlParameterSource[].class);
+        verify(namedJdbc, times(1)).batchUpdate(anyString(), captor.capture());
+        assertThat(captor.getValue()).hasSize(1);
+    }
+
+    @Test
+    void write_allPayloadsMalformed_noBatchUpdate_noThrow() {
+        repository.write(List.of("{not-json", "[broken"));
+        verify(namedJdbc, never()).batchUpdate(anyString(), any(SqlParameterSource[].class));
     }
 
     @Test

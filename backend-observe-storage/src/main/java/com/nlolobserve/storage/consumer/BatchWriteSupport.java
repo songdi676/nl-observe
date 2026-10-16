@@ -16,6 +16,8 @@ import org.springframework.stereotype.Component;
  * （依赖重投 + 写入侧 REPLACE INTO 去重兜底重复）。
  * T08 评审 backport（T07 遗留）：重试间线性退避（基数 {@value #DEFAULT_RETRY_BACKOFF_MS}ms × 重试序号），
  * 避免 Databend 故障时对数据库的忙轮询；基数为 0 时退避关闭（单测口径）。
+ * 失败分流（T08 评审 F-1）：仓库层已把解析类失败按记录粒度隔离（不抛出），
+ * 本处重试只面向瞬态写库故障——永久性解析错误不会经此路径整批重投致分区卡死。
  */
 @Component
 public class BatchWriteSupport {

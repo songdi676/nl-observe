@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -58,5 +59,16 @@ class JdbcMetricsRepositoryTest {
         assertThat(second.getValue("metricName")).isEqualTo("nl.business_duration");
         assertThat(second.getValue("bizCode")).isEqualTo("ORDER");
         assertThat(second.getValue("dpHash")).isNotEqualTo(first.getValue("dpHash"));
+    }
+
+    @Test
+    void write_malformedPayload_isolatedPerRecord_othersStillWritten() {
+        // T08 评审 F-1：单条永久坏载荷只丢自己，不抛异常、不拖累同批其余记录
+        when(namedJdbc.batchUpdate(anyString(), any(SqlParameterSource[].class))).thenReturn(new int[2]);
+        repository.write(List.of("[broken", OtlpFixtures.sampleMetrics()));
+
+        ArgumentCaptor<SqlParameterSource[]> captor = ArgumentCaptor.forClass(SqlParameterSource[].class);
+        verify(namedJdbc, times(1)).batchUpdate(anyString(), captor.capture());
+        assertThat(captor.getValue()).hasSize(2);
     }
 }
