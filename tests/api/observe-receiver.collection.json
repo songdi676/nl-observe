@@ -1,0 +1,222 @@
+{
+  "info": {
+    "_postman_id": "c8e4b3d2-1f5a-4b7c-9d3e-8f2a1b0c5d46",
+    "name": "nl-observe receiver API（T22：/config/producer 需求 yaml 逐项断言）",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "详设 §2.5/§5 与需求 yaml 的接口级回归：GET /config/producer 返回生效 producer 参数（只读回显），逐项与需求 yaml 对拍（T05 验收 #3 的 Newman 口径）。\n\n前置：\n1. receiver 服务已在 {{baseUrl}}（默认 http://localhost:8080，Spring MVC 端口）运行；\n2. 执行机直连 IP 在 OBSERVE_ALLOWED_CIDRS 白名单内（默认 10.0.0.0/8，直连口径不信任 X-Forwarded-For）——非白名单来源 /config/producer 返回 403/40301，该行为由 receiver 集成测试 OtlpSecurityIpDenyAllTest 覆盖，Newman 无法伪造源 IP，故不在本集合内；\n3. 回显值来自 KafkaExporterProperties 生效值：若测试环境用 KAFKA_BOOTSTRAP_SERVERS 覆盖了需求默认 bootstrap（10.1.8.33:9092），须同步覆盖本集合 bootstrapServers 变量（-e env.json 或 --env-var），否则「bootstrapServers 回显」用例按需求默认值对拍会失败——其余参数为固定值，不受环境影响。\n\n运行：newman run tests/api/observe-receiver.collection.json -e <env.json>\n可覆盖变量：baseUrl、bootstrapServers。\n\nenv-gated 说明（验收 #3 口径）：本集合依赖内网测试环境的 receiver 实例；环境不可达（连接失败/403 非白名单）时跳过并在报告注明，不视为集合资产缺陷——OTLP 三入口（4318）与白名单/限流/超大 body 的 403/429/413 行为由 receiver Testcontainers 集成测试（T06/T07）在 CI 侧回归，本集合只断言只读回显契约。"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080", "type": "string" },
+    { "key": "bootstrapServers", "value": "10.1.8.33:9092", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "正常：统一响应结构 {code,message,data} 且 code=0 → 200",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('统一响应 {code,message,data}（详设 §4.1）', () => {",
+              "  pm.expect(body).to.have.property('code');",
+              "  pm.expect(body).to.have.property('message');",
+              "  pm.expect(body).to.have.property('data');",
+              "});",
+              "pm.test('code=0', () => pm.expect(body.code).to.eql(0));",
+              "pm.test('message=ok', () => pm.expect(body.message).to.eql('ok'));",
+              "pm.test('data 为对象（参数 Map）', () => pm.expect(body.data).to.be.an('object').that.is.not.an('array'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/config/producer",
+          "host": ["{{baseUrl}}"],
+          "path": ["config", "producer"]
+        },
+        "description": "详设 §2.5：只读回显生效 producer 参数（与 KafkaProducerConfig 同一 KafkaExporterProperties，回显值==生效值）。"
+      }
+    },
+    {
+      "name": "正常：生效 producer 参数逐项与需求 yaml 对拍（12 项）→ 200",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const cfg = pm.response.json().data;",
+              "// 需求 yaml（详设 §5 同值）：acks=all、idempotence=true、compression-type=lz4、linger-ms=5、",
+              "// batch-size=65536、delivery-timeout-ms=20000、request-timeout-ms=15000、retries=2147483647、",
+              "// max-in-flight=5、max-block-ms=5000、buffer-memory=67108864",
+              "pm.test('acks=all', () => pm.expect(cfg.acks).to.eql('all'));",
+              "pm.test('idempotence=true', () => pm.expect(cfg.idempotence).to.eql(true));",
+              "pm.test('compressionType=lz4', () => pm.expect(cfg.compressionType).to.eql('lz4'));",
+              "pm.test('lingerMs=5', () => pm.expect(cfg.lingerMs).to.eql(5));",
+              "pm.test('batchSize=65536', () => pm.expect(cfg.batchSize).to.eql(65536));",
+              "pm.test('deliveryTimeoutMs=20000', () => pm.expect(cfg.deliveryTimeoutMs).to.eql(20000));",
+              "pm.test('requestTimeoutMs=15000', () => pm.expect(cfg.requestTimeoutMs).to.eql(15000));",
+              "pm.test('retries=2147483647（Integer.MAX_VALUE，需求 yaml 原值）', () => pm.expect(cfg.retries).to.eql(2147483647));",
+              "pm.test('maxInFlight=5', () => pm.expect(cfg.maxInFlight).to.eql(5));",
+              "pm.test('maxBlockMs=5000（AC-10 快速失败 5s）', () => pm.expect(cfg.maxBlockMs).to.eql(5000));",
+              "pm.test('bufferMemory=67108864（64MiB）', () => pm.expect(cfg.bufferMemory).to.eql(67108864));",
+              "pm.test('数值参数均为 number（非字符串）', () => {",
+              "  for (const k of ['lingerMs', 'batchSize', 'deliveryTimeoutMs', 'requestTimeoutMs', 'retries', 'maxInFlight', 'maxBlockMs', 'bufferMemory']) {",
+              "    pm.expect(cfg[k], k).to.be.a('number');",
+              "  }",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/config/producer",
+          "host": ["{{baseUrl}}"],
+          "path": ["config", "producer"]
+        },
+        "description": "需求 yaml 逐项对拍（详设 §5 与 docs/requirements/需求.md 同值）；bootstrapServers 因环境可覆盖，单列下一用例。"
+      }
+    },
+    {
+      "name": "正常：bootstrapServers 回显（测试环境 KAFKA_BOOTSTRAP_SERVERS 可覆盖，变量对拍）→ 200",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const cfg = pm.response.json().data;",
+              "pm.test('bootstrapServers 非空串', () => {",
+              "  pm.expect(cfg.bootstrapServers).to.be.a('string').that.is.not.empty;",
+              "});",
+              "pm.test('bootstrapServers 回显 == 生效值（默认需求 yaml 10.1.8.33:9092；环境覆盖时须同步覆盖集合变量）', () => {",
+              "  pm.expect(cfg.bootstrapServers).to.eql(pm.variables.get('bootstrapServers'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/config/producer",
+          "host": ["{{baseUrl}}"],
+          "path": ["config", "producer"]
+        },
+        "description": "bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:10.1.8.33:9092}——唯一环境可覆盖项，按变量对拍（口径与 T05 评审 M1 一致：不断言硬编码内网地址）。"
+      }
+    },
+    {
+      "name": "正常：需求侧参数单列 requirementOnly.sendTimeoutMs=9000（kafka-clients 无同名 producer 配置，仅回显对照）→ 200",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const cfg = pm.response.json().data;",
+              "pm.test('requirementOnly 为对象且单列 sendTimeoutMs', () => {",
+              "  pm.expect(cfg.requirementOnly).to.be.an('object');",
+              "  pm.expect(cfg.requirementOnly).to.have.property('sendTimeoutMs');",
+              "});",
+              "pm.test('sendTimeoutMs=9000（需求 yaml 原值；不参与生效参数断言，T05 评审 Minor 口径）', () => {",
+              "  // 先守卫 requirementOnly 存在性，缺失时以 AssertionError 报出而非 TypeError",
+              "  pm.expect(cfg.requirementOnly, 'requirementOnly 缺失（T05 评审 Minor：需求侧参数应单列）').to.be.an('object');",
+              "  pm.expect(cfg.requirementOnly.sendTimeoutMs).to.eql(9000);",
+              "});",
+              "pm.test('生效参数区不含 sendTimeoutMs（需求侧参数与生效参数分置）', () => {",
+              "  pm.expect(cfg).to.not.have.property('sendTimeoutMs');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/config/producer",
+          "host": ["{{baseUrl}}"],
+          "path": ["config", "producer"]
+        },
+        "description": "kafka-clients 无 send.timeout.ms 同名 producer 配置（KafkaExporterProperties javadoc），需求侧参数单列避免对拍误判。"
+      }
+    },
+    {
+      "name": "正常：路由目标三 topic 与需求 yaml 一致 → 200",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const cfg = pm.response.json().data;",
+              "pm.test('tracesTopic=nl-observe.otlp.traces', () => pm.expect(cfg.tracesTopic).to.eql('nl-observe.otlp.traces'));",
+              "pm.test('metricsTopic=nl-observe.otlp.metrics', () => pm.expect(cfg.metricsTopic).to.eql('nl-observe.otlp.metrics'));",
+              "pm.test('logsTopic=nl-observe.otlp.logs', () => pm.expect(cfg.logsTopic).to.eql('nl-observe.otlp.logs'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/config/producer",
+          "host": ["{{baseUrl}}"],
+          "path": ["config", "producer"]
+        },
+        "description": "topic 名为需求 yaml 固定值（common Topics 常量），路由目标对拍。"
+      }
+    },
+    {
+      "name": "正常：参数自洽不变量（delivery ≥ linger + request；64MiB 缓冲）→ 200",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "const cfg = pm.response.json().data;",
+              "pm.test('deliveryTimeoutMs >= lingerMs + requestTimeoutMs（kafka-clients 硬约束，需求 yaml 注释同口径）', () => {",
+              "  pm.expect(cfg.deliveryTimeoutMs >= cfg.lingerMs + cfg.requestTimeoutMs,",
+              "    'delivery=' + cfg.deliveryTimeoutMs + ' < linger+request=' + (cfg.lingerMs + cfg.requestTimeoutMs)).to.be.true;",
+              "});",
+              "pm.test('bufferMemory=64*1024*1024（64MiB 字面值不变量）', () => {",
+              "  pm.expect(cfg.bufferMemory).to.eql(64 * 1024 * 1024);",
+              "});",
+              "pm.test('maxBlockMs < deliveryTimeoutMs（AC-10：5s 快速失败早于 20s 交付超时）', () => {",
+              "  pm.expect(cfg.maxBlockMs < cfg.deliveryTimeoutMs).to.be.true;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/config/producer",
+          "host": ["{{baseUrl}}"],
+          "path": ["config", "producer"]
+        },
+        "description": "除逐项对拍外补结构不变量：防止环境侧误改单项后其余项仍逐值通过而整体失效。"
+      }
+    }
+  ]
+}
