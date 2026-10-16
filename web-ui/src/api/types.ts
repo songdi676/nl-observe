@@ -18,10 +18,11 @@ export interface BusinessItem {
   endReason: string
 }
 
-/** span 事件（biz.suspend_start / biz.resume 等） */
+/** span 事件（biz.suspend_start / biz.resume 等；契约：{name,time:ISO-8601 UTC,attributes}，
+ *  与 backend-observe-common SpanNode.EventNode 一致） */
 export interface SpanEvent {
   name: string
-  timestamp?: string
+  time?: string | null
   attributes?: Record<string, unknown>
 }
 
@@ -46,9 +47,13 @@ export interface SpanTree {
   spans: SpanNode[]
 }
 
-/** §2.3 单 span 全字段（JSON 列已解析为对象） */
+/** §2.3 单 span 全字段（JSON 列已解析为对象；字段与 backend SpanDetail DTO 对齐） */
 export interface SpanDetail extends SpanNode {
   traceId: string
+  traceState?: string | null
+  statusMessage?: string | null
+  bizCode?: string | null
+  serviceName?: string | null
   resource: Record<string, unknown>
   scope: Record<string, unknown>
 }
