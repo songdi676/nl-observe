@@ -7,7 +7,8 @@
  * T13 落地：signIn/signOut 经 SigninManager 状态机（互斥：已签入再签入先隐式 sign_out）；
  * startBusiness/suspendBusiness/resumeBusiness/endBusiness 经 BusinessManager
  * （挂起/恢复/有效耗时，end 发 nl.business_duration data point）。
- * REST 自动埋点在 T14、首屏/flush 指标在 T15、vue 指令在 T16。
+ * T16 落地：businessState/activeBusiness 供 vue 指令（v-biz unmount 兜底、v-span 取父）查询。
+ * REST 自动埋点在 T14、首屏/flush 指标在 T15。
  */
 import type { Tracer } from '@opentelemetry/api';
 import { WebTracerProvider } from '@opentelemetry/sdk-trace-web';
@@ -21,8 +22,10 @@ import { SigninManager } from './SigninManager';
 import {
   BusinessManager,
   METRIC_BUSINESS_DURATION,
+  type ActiveBusiness,
   type BizEndReason,
   type BizStatus,
+  type BusinessState,
 } from './BusinessManager';
 
 export interface NlObserveOptions {
@@ -191,6 +194,22 @@ export class NlObserveClient {
   ): void {
     if (!this.guard('endBusiness')) return;
     this.business?.end(bizId, options);
+  }
+
+  /**
+   * 查业务实例状态（ACTIVE/SUSPENDED；ENDED 或未知 → undefined，已结束实例已移出实例表）。
+   * T16 指令 unmount 兜底用：仅未显式结束的业务才以 fail+unmount 结束，不覆盖 explicit 口径。
+   */
+  businessState(bizId: string): BusinessState | undefined {
+    if (!this.guard('businessState')) return undefined;
+    return this.business?.stateOf(bizId);
+  }
+
+  /** 当前 ACTIVE 业务（bizId + root span；至多一个——T13 Major-2 不变量；无则 undefined）。
+   *  T16 v-span 指令取子 span 父（与 T14 REST 埋点取父同规则）。 */
+  activeBusiness(): ActiveBusiness | undefined {
+    if (!this.guard('activeBusiness')) return undefined;
+    return this.business?.getActive();
   }
 
   trackRest(method: string, route: string, statusCode: number, durationMs: number): void {
