@@ -16,17 +16,15 @@ import type { AddressInfo } from 'node:net';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { InMemorySpanExporter, SimpleSpanProcessor, type ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { NlObserveClient } from '@nl-observe/sdk-web';
 // 0.8.11：unmountApp 是独立命名导出（不在 MicroApp 实例上——与 rc.32 的 this.unmountApp 差异，
 // POC 记录点：双版本线 API 面不一致）
 import microApp0811, { unmountApp as unmountApp0811 } from '@micro-zoe/micro-app';
-// 顺序敏感：worker-shim 必须在 'micro-app-rc' 之前求值（rc.32 模块顶层 Proxy(window.Worker)，
-// jsdom 无 Worker → 导入即抛）
-import './worker-shim';
 import microAppRc from 'micro-app-rc';
 import {
   filterRestSpans,
+  toDump,
   type SpanDump,
   type SubAppPhaseDetail,
   type SubAppTrackRestDetail,
@@ -161,9 +159,18 @@ export function scenarioName(line: VersionLine, sandbox: boolean, sdk: 'sub' | '
   return `poc-${line.replace(/\W/g, '_')}-${sdk}-${sandbox ? 'sb' : 'ns'}`;
 }
 
-// start() 每版本线只调一次（rc.32 重复 start 会 logError；0.8.11 重复会 warn——均为噪音）
+// start() 每版本线只调一次（rc.32 重复 start 会 logError；0.8.11 重复会 warn——均为噪音）。
+// rc.32 的 customElements.define('micro-app') 只发生在 start() 内（defineElement 唯一调用点）
+// ——不调 start() 则 renderApp 创建的是未定义元素，挂载路径根本不执行。探针（capture-rc32.spec.ts）
+// 与挂载工装共用本守卫，保证「先 start 再 renderApp」这一前提确定成立。
 let started0811 = false;
 let startedRc = false;
+
+export function startRcOnce(): void {
+  if (startedRc) return;
+  microAppRc.start();
+  startedRc = true;
+}
 
 export async function mountMicroApp(
   line: VersionLine,
@@ -184,11 +191,11 @@ export async function mountMicroApp(
     return;
   }
   // 1.0.0-rc.32：renderApp 命令式挂载（options 非 container 键 → setAttribute，
-  // 'disable-sandbox': true 即关沙箱）；resolve 于 MOUNTED/ERROR 生命周期
-  if (!startedRc) {
-    microAppRc.start();
-    startedRc = true;
-  }
+  // 'disable-sandbox': true 即关沙箱）；resolve 于 MOUNTED/ERROR 生命周期。
+  // 注意（corr Min-3）：rc.32 的挂载/卸载路径在 jsdom 下不可跑通（品牌校验，见
+  // capture-rc32.spec.ts 与 poc-notes T21 节）——本分支未被任何验收用例执行，
+  // 预留给真实浏览器（Playwright）复验 rc.32 捕获率时使用。
+  startRcOnce();
   const ok = await microAppRc.renderApp({
     name: opts.name,
     url: opts.url,
@@ -231,17 +238,6 @@ export interface ScenarioResult {
   fetchErrors: number;
 }
 
-function toDump(span: ReadableSpan): SpanDump {
-  return {
-    name: span.name,
-    traceId: span.spanContext().traceId,
-    spanId: span.spanContext().spanId,
-    parentSpanId: span.parentSpanContext?.spanId,
-    kind: span.kind,
-    attributes: { ...span.attributes },
-  };
-}
-
 function restDumps(exporter: InMemorySpanExporter): SpanDump[] {
   return filterRestSpans(exporter.getFinishedSpans().map(toDump));
 }
@@ -277,7 +273,12 @@ export async function runCaptureScenario(opts: ScenarioOptions): Promise<Scenari
       });
       hostClient.signIn('C-21');
       hostClient.startBusiness('ORDER');
-      // 兜底桥接：host 模式下子应用经 'poc:track-rest'（bubbles）请求宿主 client 补记
+      // 兜底桥接：host 模式下子应用经 'poc:track-rest'（bubbles）请求宿主 client 补记。
+      // ⚠ 生产化前必须加校验（评审 sec M-2）：本桥接对事件 detail 的 method/route/
+      // statusCode/durationMs 零校验即透传——正式集成落地时任意能向容器派发 DOM 事件的
+      // 脚本（恶意子应用/其他嵌套应用）即可伪造 REST span 钉在宿主业务 root 上
+      // （遥测注入/篡改）。POC 内 bundle 受信故不校验；正式任务须补事件来源鉴别
+      // （isTrusted/目标元素归属）+ 字段类型与取值范围校验（poc-notes T21 跟进项）。
       hostContainer.addEventListener('poc:track-rest', ((ev: Event) => {
         const d = (ev as CustomEvent<SubAppTrackRestDetail>).detail;
         hostClient?.trackRest(d.method, d.route, d.statusCode, d.durationMs);

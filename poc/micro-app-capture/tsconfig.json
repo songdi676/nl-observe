@@ -11,7 +11,8 @@
     "lib": ["ES2020", "DOM"],
     "baseUrl": ".",
     "paths": {
-      "@nl-observe/sdk-web": ["../../sdk-web/src/index.ts"]
+      "@nl-observe/sdk-web": ["../../sdk-web/src/index.ts"],
+      "@nl-observe/sdk-web/vue3": ["../../sdk-web/src/vue3.ts"]
     }
   },
   "include": ["src", "test", "app", "vitest.config.ts"]

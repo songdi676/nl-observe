@@ -80,7 +80,8 @@ export function resetSubAppSdk(): void {
   lastExporter = undefined;
 }
 
-function toDump(span: ReadableSpan): SpanDump {
+/** ReadableSpan → 可跨沙箱序列化的 SpanDump（harness 复用同一口径，评审 m-3）。 */
+export function toDump(span: ReadableSpan): SpanDump {
   return {
     name: span.name,
     traceId: span.spanContext().traceId,

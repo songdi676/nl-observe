@@ -3,7 +3,7 @@
  * v-span 手动子 span 兜底（风险 #5：自动埋点捕获不足时的完整覆盖路径）。
  *
  * 断言口径（与 T14 自动埋点共享 recordRestSpan，行为一致）：
- * - trackRest：name='HTTP {METHOD}'、SpanKind=CLIENT(1)、parent=当前 ACTIVE 业务 root
+ * - trackRest：name='HTTP {METHOD}'、SpanKind=CLIENT(2)、parent=当前 ACTIVE 业务 root
  *   span（同 traceId + parentSpanId=root spanId）、属性恰为白名单 4 项、route 去 query；
  *   无 ACTIVE 业务 → 不上报（与自动埋点同口径）；未 init 门面 no-op。
  * - v-span：子 span parent=ACTIVE 业务 root（同 traceId、parentSpanId 钉住），
@@ -22,24 +22,16 @@ import {
   NlObserveClient,
   registerVue3Directives,
   type Vue3DirectiveDef,
-} from '../../../sdk-web/src/vue3';
+} from '@nl-observe/sdk-web/vue3';
 import {
   ATTR_HTTP_REQUEST_METHOD,
   ATTR_HTTP_RESPONSE_STATUS_CODE,
   ATTR_HTTP_ROUTE,
   ATTR_NL_DURATION_MS,
   REST_SPAN_NAME_PREFIX,
-} from '../../../sdk-web/src/core/rest/autoprofile';
-
-/** REST span 属性白名单 4 项（与 backend AttributeKeys.REST_SPAN_WHITELIST 一致）。 */
-const REST_ATTR_KEYS_SORTED = [
-  ATTR_HTTP_REQUEST_METHOD,
-  ATTR_HTTP_RESPONSE_STATUS_CODE,
-  ATTR_HTTP_ROUTE,
-  ATTR_NL_DURATION_MS,
-].sort();
-
-const SPAN_KIND_CLIENT = 2; // @opentelemetry/api SpanKind 枚举：INTERNAL=0/SERVER=1/CLIENT=2
+} from '@nl-observe/sdk-web';
+// 共享口径收敛于 assertions.ts（评审 m-3）；其 harness/sub-app 导入均为 type-only，不拉入工装
+import { REST_ATTR_KEYS_SORTED, SPAN_KIND_CLIENT } from './assertions';
 
 interface Harness {
   client: NlObserveClient;
@@ -102,7 +94,7 @@ describe('T21 兜底：trackRest 手动 REST span 结构', () => {
     expect(s.attributes[ATTR_NL_DURATION_MS]).toBe(42);
   });
 
-  it('无 ACTIVE 业务（未起业务）→ trackRest 不上报（与自动埋点同口径）', () => {
+  it('无 ACTIVE 业务（业务已结束）→ trackRest 不上报（与自动埋点同口径）', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { client, exporter } = makeClient();
     client.startBusiness('ORDER');
@@ -122,7 +114,7 @@ describe('T21 兜底：trackRest 手动 REST span 结构', () => {
     expect(restSpans(exporter)).toHaveLength(0);
   });
 
-  it('trackRest 注入时钟：duration 负值归零不抛（同 T14 口径）', () => {
+  it('trackRest duration 负值归零不抛（入参归一化，未涉时钟注入；同 T14 口径）', () => {
     const { client, exporter } = makeClient();
     client.startBusiness('ORDER');
     client.trackRest('POST', '/api/pay', 500, -3);
@@ -144,10 +136,10 @@ describe('T21 兜底：trackRest 手动 REST span 结构', () => {
 describe('T21 兜底：v-span 手动子 span parent 正确', () => {
   it('v-span 子 span parent=当前 ACTIVE 业务 root（同 traceId、parentSpanId 钉住）', async () => {
     const { client, exporter } = makeClient();
+    // 单次注册取全部指令定义（v-biz 与 v-span 同源；评审 n-2 去掉冗余二次注册）
     const defs: Record<string, Vue3DirectiveDef> = {};
     registerVue3Directives({ directive: (name, def) => void (defs[name] = def) }, client);
-    const spanDef = captureSpanDirective(client);
-    void defs;
+    const spanDef = defs.span;
 
     const Comp = defineComponent({
       name: 'FallbackSpan',

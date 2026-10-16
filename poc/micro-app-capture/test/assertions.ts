@@ -12,7 +12,7 @@ import {
   ATTR_HTTP_ROUTE,
   ATTR_NL_DURATION_MS,
   REST_SPAN_NAME_PREFIX,
-} from '../../../sdk-web/src/core/rest/autoprofile';
+} from '@nl-observe/sdk-web';
 import type { ScenarioResult } from '../src/harness';
 import type { SpanDump } from '../src/sub-app';
 
@@ -21,8 +21,9 @@ export const CAPTURE_FLOOR = 9;
 
 export const SPAN_KIND_CLIENT = 2; // @opentelemetry/api SpanKind.CLIENT
 
-/** REST span 属性白名单 4 项（与 T14/后端 AttributeKeys.REST_SPAN_WHITELIST 一致）。 */
-const REST_ATTR_KEYS_SORTED = [
+/** REST span 属性白名单 4 项（与 T14/后端 AttributeKeys.REST_SPAN_WHITELIST 一致；
+ * fallback.spec.ts 复用本导出，评审 m-3）。 */
+export const REST_ATTR_KEYS_SORTED = [
   ATTR_HTTP_REQUEST_METHOD,
   ATTR_HTTP_RESPONSE_STATUS_CODE,
   ATTR_HTTP_ROUTE,

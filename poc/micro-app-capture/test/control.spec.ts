@@ -8,8 +8,8 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { NlObserveClient } from '../../../sdk-web/src/core/client';
-import { REST_SPAN_NAME_PREFIX } from '../../../sdk-web/src/core/rest/autoprofile';
+import { NlObserveClient, REST_SPAN_NAME_PREFIX } from '@nl-observe/sdk-web';
+import { SPAN_KIND_CLIENT } from './assertions'; // 共享口径收敛（评审 m-3）
 import {
   installFetchBindingShim,
   startMockBackend,
@@ -25,7 +25,6 @@ import {
 } from '../src/sub-app';
 
 const FETCH_COUNT = 10;
-const SPAN_KIND_CLIENT = 2; // @opentelemetry/api SpanKind.CLIENT
 
 function restNames(spans: { name: string }[]): string[] {
   return spans.map((s) => s.name);
@@ -101,7 +100,8 @@ describe('T21 对照组（无 micro-app）：runSubApp 两阶段基线', () => {
     hostClient.startBusiness('ORDER');
     const active = hostClient.activeBusiness();
     expect(active).toBeDefined();
-    // 兜底桥接（与 harness.runCaptureScenario host 分支同构）
+    // 兜底桥接（与 harness.runCaptureScenario host 分支同构；对 detail 零校验即透传，
+    // 生产化前必须加来源+载荷校验——见 harness 同段注释，评审 sec M-2）
     container.addEventListener('poc:track-rest', ((ev: Event) => {
       const d = (ev as CustomEvent<SubAppTrackRestDetail>).detail;
       hostClient?.trackRest(d.method, d.route, d.statusCode, d.durationMs);
@@ -125,7 +125,10 @@ describe('T21 对照组（无 micro-app）：runSubApp 两阶段基线', () => {
     const all = exporter
       .getFinishedSpans()
       .filter((s) => s.name.startsWith(REST_SPAN_NAME_PREFIX));
-    expect(all).toHaveLength(FETCH_COUNT * 2); // 自动 + 兜底
+    // 自动 + 兜底。本断言依赖「前一用例（sub 模式）afterEach 中 client.shutdown()
+    // 已还原被包装的 fetch」（SDK installRestInstrumentation 的 uninstall 还原逻辑）
+    // ——否则宿主 SDK 二次包装会在同一 fetch 上双层记账、span 翻倍（评审 n-3）
+    expect(all).toHaveLength(FETCH_COUNT * 2);
 
     const rootSpanId = active!.span.spanContext().spanId;
     for (const s of all) {

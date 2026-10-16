@@ -207,18 +207,34 @@ v-span 手动钉 parent 由 fallback.spec.ts 单测覆盖。
   宿主包装的 fetch 可见 → 自动埋点足够；沙箱对 SDK 自动 REST 捕获无实质损耗。
 - 兜底路径（trackRest/v-span）是框架无关的 SDK 能力，已验证可用、parent 语义正确，
   作为沙箱保真度不确定场景（rc 线、iframe、shadowDOM 组合）的保险，非默认必需。
-- rc.32（1.0.0-rc.32）在 jsdom 下不可跑通（见下），捕获率留真实浏览器复验（跟进项）。
+- rc.32（1.0.0-rc.32）**沙箱线**在 jsdom 下不可跑通（见下），其捕获率留真实浏览器复验
+  （跟进项）；**无沙箱线**在 jsdom 下可跑通（探针实测 MOUNTED 达、就绪信号达）。
 
-### rc.32 线 jsdom 保真缺口（capture-rc32.spec.ts 探针钉住）
+### rc.32 线 jsdom 保真缺口（capture-rc32.spec.ts 探针钉住；2026-10-17 评审后更正）
 
+- **前提（评审 arch M-1 修复）**：rc.32 的 `customElements.define('micro-app')` 只发生在
+  `start()` 内（lib 唯一调用点 defineElement）。探针必须先 `startRcOnce()` 再 `renderApp`
+  ——旧版探针未调 start()，元素未定义、挂载路径根本不执行，「就绪不达」等结论系空转假象。
+  修复后探针钉住真实机制（下述均为 start() 后的实测）。
 - sandbox 开：挂载收尾 `sandBox.microAppWindow.dispatchEvent(CustomEvent)`（CustomWindow 是
-  普通对象作 proxy target）→ jsdom EventTarget 品牌校验拒绝 → MOUNTED 不达 → renderApp
-  预算内不 resolve（并产生 micro-app 内部 unhandled rejection，项目级
-  `dangerouslyIgnoreUnhandledErrors: true` 显式容忍）。
-- sandbox 关：renderApp 完成性依赖进程内先前状态（单独跑 resolve；先前沙箱挂载崩溃后挂起），
-  决定性事实两种形态一致：子应用就绪信号不达 → jsdom 下无法测量捕获率。
+  普通对象作 proxy target）→ jsdom EventTarget 品牌校验拒绝（TypeError: "not a valid
+  instance of EventTarget"）→ MOUNTED 不达 → renderApp 预算内不 resolve。品牌校验
+  unhandled rejection 由**探针自捕获**（beforeAll 换装 process 级监听器 + 文案断言，
+  afterAll 还原）——不设项目级 `dangerouslyIgnoreUnhandledErrors`（评审 sec M-1/arch
+  m-1/corr Min-1：该 flag 在 vitest 5 是 NonProjectOptions，写在被目录引用的工程配置
+  顶层作用域不确定，可能吞掉根聚合全部未处理异常，属测试完整性后门；去 flag 后根聚合
+  实跑 93/93 绿，结论留痕于此）。
+- 沙箱挂载崩溃后 `unmountApp` 挂起（预算内不 resolve）——探针以 race 超时预算处理，不裸 await。
+- sandbox 关：不触发 CustomWindow.dispatchEvent → 品牌校验不参与 → renderApp resolve(true)
+  （MOUNTED 达）+ 子应用就绪信号达（即便前序沙箱探针崩溃后进程内状态残留亦不影响）。
+  旧「完成性依赖先前状态/就绪不达」说法系未 start 假象，已更正。
 - 真实浏览器该路径预期成立（品牌校验是 jsdom 特有约束）；跟进项：真浏览器（Playwright）
-  跑同工装复验 rc.32 捕获率。
+  跑同工装复验 rc.32 **沙箱线**捕获率。
+- 跟进项（评审 sec M-2）：host 模式兜底桥接（`poc:track-rest` 事件透传宿主 client.trackRest）
+  对载荷零校验——正式集成落地时该信道必须加事件来源鉴别（isTrusted/目标元素归属）+
+  字段类型与取值范围校验，否则任意能向容器派发 DOM 事件的脚本可伪造 REST span 钉在
+  宿主业务 root 上（遥测注入/篡改）。POC 内 bundle 受信故不校验（harness/control 两处
+  注释已标注）。
 
 ### 双版本线 API 面差异（集成文档需标注）
 
@@ -234,7 +250,8 @@ v-span 手动钉 parent 由 fallback.spec.ts 单测覆盖。
 - fetch 绑定：浏览器 globalThis===window；vitest jsdom 下分裂（undici vs 无）→
   `installFetchBindingShim()` 统一两侧 get/set。
 - rc.32 模块顶层 `new Proxy(window.Worker,…)`：jsdom 无 Worker → `src/worker-shim.ts`
-  导入期补桩（导入顺序敏感）。
+  经本工程 vitest `setupFiles` 集中补桩（先于一切测试模块求值，不再依赖各 spec
+  手工导入顺序，评审 m-4）。
 - 沙箱内 SDK init：proxyWindow 非真 EventTarget → `windowLike: null, performanceObserver: null`
   离线模式（不注册窗口监听器）。
 - esbuild JS API 在 jsdom worker 内模块加载断言必假 → bundle 构建走子进程
