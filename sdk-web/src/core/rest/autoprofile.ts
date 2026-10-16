@@ -19,6 +19,7 @@
  * 的 open/send；uninstall 仅在「当前全局仍是本层包装」时还原（多客户端叠加时不破坏上层包装链）。
  */
 import { ROOT_CONTEXT, SpanKind, trace, type Context, type Span, type Tracer } from '@opentelemetry/api';
+import { safeUrlForLog } from '../flush';
 
 /** REST span 属性：请求方法（AttributeKeys.HTTP_REQUEST_METHOD） */
 export const ATTR_HTTP_REQUEST_METHOD = 'http.request.method';
@@ -41,6 +42,14 @@ export interface RestRecorderDeps {
   now?: () => number;
   /** URL 排除谓词（OTLP 自身端点；缺省不排除） */
   isExcludedUrl?: (url: string) => boolean;
+  /**
+   * T17 restPathFilter：自动埋点 URL 白名单谓词（原始 URL 口径，规范化前判定——
+   * 入参多为绝对 URL，与落地 route 不同口径，见 client.ts RestPathFilter 文档，安全 F-5）。
+   * 缺省 undefined = 全部非排除 URL 均埋点；提供时仅 true 的 URL 产生 REST span
+   * （宿主按业务路径收敛埋点面，trackRest 手动兜底不受此过滤器约束）。
+   * 谓词抛错 → 该请求跳过埋点（fail-closed，安全 F-1），绝不击穿业务请求。
+   */
+  restPathFilter?: (url: string) => boolean;
 }
 
 export interface RestSpanInput {
@@ -65,6 +74,24 @@ function nowMs(deps: RestRecorderDeps): number {
 
 function isExcluded(deps: RestRecorderDeps, url: string): boolean {
   return deps.isExcludedUrl ? deps.isExcludedUrl(url) : false;
+}
+
+/**
+ * 自动埋点判定：OTLP 自排除优先，其次 restPathFilter 白名单（缺省全放行）。
+ * 安全 F-1：restPathFilter 是宿主回调，在 fetch/XHR 关键路径上无防护调用会——
+ * 谓词抛错 → wrappedFetch 同步抛出，业务请求根本没发出（连 Promise 都拿不到），
+ * 直接违背 NFR-03/详设 §4.2「静默降级、不阻断业务」。抛错按不埋点处理
+ * （fail-closed：不采宿主本可能不想采的数据）+ console.debug。
+ */
+function shouldInstrument(deps: RestRecorderDeps, url: string): boolean {
+  if (isExcluded(deps, url)) return false;
+  if (!deps.restPathFilter) return true;
+  try {
+    return deps.restPathFilter(url);
+  } catch (err) {
+    console.debug('[nl-observe] restPathFilter threw; request proceeds uninstrumented:', safeUrlForLog(url), err);
+    return false;
+  }
 }
 
 /** 方法规范化：大写+trim；空值缺省 GET（fetch 语义）。 */
@@ -179,7 +206,7 @@ export function installRestInstrumentation(deps: RestRecorderDeps): RestInstrume
   if (typeof originalFetch === 'function') {
     wrappedFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = extractFetchUrl(input);
-      if (url === undefined || isExcluded(deps, url)) {
+      if (url === undefined || !shouldInstrument(deps, url)) {
         return originalFetch(input, init);
       }
       // parent 取请求发起时刻的 ACTIVE 业务（业务在请求期间结束/切换不影响归属）
@@ -240,7 +267,7 @@ export function installRestInstrumentation(deps: RestRecorderDeps): RestInstrume
 
     wrappedSend = function (this: XhrLike, body?: unknown): void {
       const m = meta.get(this as object);
-      if (m && !isExcluded(deps, m.url)) {
+      if (m && shouldInstrument(deps, m.url)) {
         const parent = deps.getActiveRootSpan();
         if (parent) {
           const method = m.method;

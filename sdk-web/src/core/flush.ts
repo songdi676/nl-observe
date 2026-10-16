@@ -30,39 +30,92 @@ export const DEFAULT_FLUSH_TIMEOUT_MS = 2000;
 /** OTLP/HTTP 文本传输（浏览器 sendBeacon；node 回退 fetch）。 */
 export type BeaconTransport = (url: string, body: string) => Promise<void>;
 
+/**
+ * 安全 F-3：失败日志/错误消息只保留 origin+path——宿主若把凭据放进 endpoint 的
+ * query/userinfo（传输层无 header 支持时的现实做法），不得随 console.debug 被页面
+ * 错误追踪库（Sentry/LogRocket 类）钩走。
+ */
+export function safeUrlForLog(url: string): string {
+  try {
+    const u = new URL(url);
+    // host 不含 userinfo；query/hash 天然剥离
+    return `${u.protocol}//${u.host}${u.pathname}`;
+  } catch {
+    // 相对 URL：仅留 path 段（query/hash 可能携带凭据）
+    const cut = String(url).split('#')[0];
+    return cut.split('?')[0];
+  }
+}
+
 const textDecoder = new TextDecoder();
 
-export function createOtlpHttpBeaconTransport(): BeaconTransport {
+/**
+ * T17 降级策略（NFR-03）：endpoint 不可达/超时 → console.debug 记录后仍抛错——
+ * 抛错是 exporter 契约（回调 FAILED → DropCounting 计 dropped_spans、flush 分类 fail），
+ * 「不抛错、不阻断业务」由上层保证（BSP/reader 吞错 + flush hook best-effort），
+ * 业务 span 照常本地生成。
+ *
+ * timeoutMs：fetch 回退路径的请求超时（AbortSignal.timeout）；浏览器 sendBeacon 路径
+ * 为 fire-and-forget 队列（无请求级超时），整体冲刷由 flush hook 的 flushTimeoutMs 兜底。
+ */
+export function createOtlpHttpBeaconTransport(timeoutMs?: number): BeaconTransport {
   return async (url, body) => {
-    const nav = (globalThis as unknown as {
-      navigator?: { sendBeacon?: (u: string, d: unknown) => boolean };
-    }).navigator;
-    if (typeof nav?.sendBeacon === 'function' && typeof globalThis.Blob === 'function') {
-      // sendBeacon 只能带文本/Blob：OTLP/JSON 文本口径，Blob 声明 content-type
-      const ok = nav.sendBeacon(url, new Blob([body], { type: 'application/json' }));
-      if (!ok) {
-        throw new Error(`sendBeacon rejected for ${url} (queue full/unsupported) → OTLP/HTTP beacon export failed`);
+    try {
+      const nav = (globalThis as unknown as {
+        navigator?: { sendBeacon?: (u: string, d: unknown) => boolean };
+      }).navigator;
+      if (typeof nav?.sendBeacon === 'function' && typeof globalThis.Blob === 'function') {
+        // sendBeacon 只能带文本/Blob：OTLP/JSON 文本口径，Blob 声明 content-type
+        const ok = nav.sendBeacon(url, new Blob([body], { type: 'application/json' }));
+        if (!ok) {
+          throw new Error(`sendBeacon rejected for ${safeUrlForLog(url)} (queue full/unsupported) → OTLP/HTTP beacon export failed`);
+        }
+        return;
       }
-      return;
-    }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    });
-    if (!res.ok) {
-      throw new Error(`OTLP/HTTP export failed: ${res.status} ${url}`);
+      const init: RequestInit = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      };
+      if (timeoutMs !== undefined && timeoutMs > 0 && typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal) {
+        init.signal = AbortSignal.timeout(timeoutMs);
+      }
+      const res = await fetch(url, init);
+      if (!res.ok) {
+        // 安全 F-3：错误消息只带 origin+path（query 可能含凭据）
+        throw new Error(`OTLP/HTTP export failed: ${res.status} ${safeUrlForLog(url)}`);
+      }
+    } catch (err) {
+      console.debug('[nl-observe] OTLP/HTTP export degraded (endpoint unreachable or timeout):', safeUrlForLog(url), err);
+      throw err;
     }
   };
 }
 
-/** /v1/traces → /v1/metrics；base URL → 追加 /v1/metrics（OTLP/HTTP 单接收端口约定）。 */
+/**
+ * /v1/traces → /v1/metrics；base URL → 追加 /v1/metrics（OTLP/HTTP 单接收端口约定）。
+ * 安全 F-4：按 URL 解析后仅替换 path 末段并保留 query——旧字符串拼接遇带 query 的
+ * endpoint（`…/v1/traces?key=K`）会派生出坏 URL（`…?key=K/v1/metrics`），
+ * 叠加静默降级后 metrics 通道永久失效且不可见。
+ */
 export function metricsUrlFromTracesUrl(url: string): string {
   const trimmed = url.replace(/\/+$/, '');
-  if (trimmed.endsWith('/v1/traces')) {
-    return `${trimmed.slice(0, -'/traces'.length)}/metrics`;
+  try {
+    const u = new URL(trimmed);
+    if (u.pathname.endsWith('/v1/traces')) {
+      u.pathname = `${u.pathname.slice(0, -'/traces'.length)}/metrics`;
+    } else {
+      const base = u.pathname.endsWith('/') ? u.pathname : `${u.pathname}/`;
+      u.pathname = `${base}v1/metrics`;
+    }
+    return u.toString();
+  } catch {
+    // 非绝对 URL（相对路径）：保留原字符串拼接语义
+    if (trimmed.endsWith('/v1/traces')) {
+      return `${trimmed.slice(0, -'/traces'.length)}/metrics`;
+    }
+    return `${trimmed}/v1/metrics`;
   }
-  return `${trimmed}/v1/metrics`;
 }
 
 export interface SendBeaconExporterConfig {

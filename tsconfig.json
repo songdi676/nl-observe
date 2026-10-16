@@ -22,6 +22,7 @@
     "sdk-web/test/business.spec.ts",
     "sdk-web/test/flush.spec.ts",
     "sdk-web/test/rest.spec.ts",
+    "sdk-web/test/export.spec.ts",
     "sdk-web/test/vue2-host",
     "sdk-web/test/vue3-host"
   ]
