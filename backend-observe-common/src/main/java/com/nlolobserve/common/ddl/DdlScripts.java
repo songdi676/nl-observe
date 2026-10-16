@@ -18,7 +18,15 @@ package com.nlolobserve.common.ddl;
  */
 public final class DdlScripts {
 
-    /** spans：去重身份键（REPLACE INTO 键）= 全聚簇键（同 span 重复上报折叠） */
+    /**
+     * spans：去重身份键（REPLACE INTO 键）= 全聚簇键（同 span 重复上报折叠）。
+     *
+     * events_json 契约（T10 评审 Critical：AC-2 span 树须含 events）：OTLP span events 数组，
+     * 查询端原生形态 {@code [{"name":"...","time":"ISO-8601 UTC","attributes":{扁平键值}}]}，
+     * 与 SpanNode.EventNode 一一对应。存储写路径从接收端 Kafka 载荷转换
+     * （timeUnixNano→ISO-8601 UTC、attributes KeyValue 数组→扁平 map，与 attributes_json 同形态）；
+     * 无事件写 '[]'（列缺省）。
+     */
     public static final String OTEL_SPANS = """
             CREATE TABLE IF NOT EXISTS otel_spans (
               customer_id        String        NOT NULL,
@@ -37,7 +45,8 @@ public final class DdlScripts {
               effective_duration_ms Float64 DEFAULT 0,
               resource_json      String,
               scope_json         String,
-              attributes_json    String
+              attributes_json    String,
+              events_json        String  DEFAULT '[]'
             )
             CLUSTER BY (customer_id, trace_id, span_id, start_time, end_time)
             """;

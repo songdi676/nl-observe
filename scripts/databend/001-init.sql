@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS otel_spans (
   effective_duration_ms Float64 DEFAULT 0,
   resource_json      String,
   scope_json         String,
-  attributes_json    String
+  attributes_json    String,
+  events_json        String  DEFAULT '[]'
 )
 CLUSTER BY (customer_id, trace_id, span_id, start_time, end_time)
 ;

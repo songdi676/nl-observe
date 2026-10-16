@@ -366,6 +366,9 @@
                   "  pm.expect(body.data.resource).to.be.an('object');",
                   "  pm.expect(body.data.scope).to.be.an('object');",
                   "  pm.expect(body.data.attributes).to.be.an('object');",
+                  "});",
+                  "pm.test('events 为数组（与 IT 契约回归口径一致，T10 评审 Nit）', () => {",
+                  "  pm.expect(body.data.events).to.be.an('array');",
                   "});"
                 ]
               }

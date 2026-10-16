@@ -62,6 +62,11 @@ class QueryApiSeedDataIntegrationTest {
     private static final String REST_ATTRS_WHITELIST =
             "{\"http.request.method\":\"GET\",\"http.route\":\"/checkout\","
                     + "\"http.response.status_code\":200,\"nl.duration_ms\":40}";
+    /** 业务 root span 的挂起/恢复事件（events_json 契约见 DdlScripts.OTEL_SPANS 注释；
+     *  T10 评审 Critical：AC-2 要求 span 树含 events，预置非空事件并断言透出） */
+    private static final String ROOT_EVENTS =
+            "[{\"name\":\"biz.suspend_start\",\"time\":\"2026-09-15T10:00:01Z\",\"attributes\":{\"biz.biz_id\":\"s-root\"}},"
+                    + "{\"name\":\"biz.resume\",\"time\":\"2026-09-15T10:00:02Z\",\"attributes\":{}}]";
 
     private static DatabendContainer databend;
 
@@ -130,11 +135,11 @@ class QueryApiSeedDataIntegrationTest {
     private static void seedSamples(JdbcTemplate jdbc) {
         jdbc.update("INSERT INTO otel_spans (customer_id, trace_id, span_id, parent_span_id, name, kind,"
                         + " start_time, end_time, status_code, biz_code, service_name, effective_duration_ms,"
-                        + " resource_json, scope_json, attributes_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        + " resource_json, scope_json, attributes_json, events_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 "c-1", "t-1", "s-root", "", "biz.business.ORDER", 1,
                 Timestamp.from(Instant.parse("2026-09-15T10:00:00Z")),
                 Timestamp.from(Instant.parse("2026-09-15T10:00:03Z")), 1, "ORDER", "shop-web", 250.0,
-                "{\"service.version\":\"1.0\"}", "{\"name\":\"nl-observe\"}", ROOT_ATTRS_SUCCESS);
+                "{\"service.version\":\"1.0\"}", "{\"name\":\"nl-observe\"}", ROOT_ATTRS_SUCCESS, ROOT_EVENTS);
         jdbc.update("INSERT INTO otel_spans (customer_id, trace_id, span_id, parent_span_id, name, kind,"
                         + " start_time, end_time, status_code, biz_code, service_name, effective_duration_ms,"
                         + " resource_json, scope_json, attributes_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -247,7 +252,14 @@ class QueryApiSeedDataIntegrationTest {
                 .andExpect(jsonPath("$.data.spans[0].parentSpanId").value(""))
                 .andExpect(jsonPath("$.data.spans[0].name").value("biz.business.ORDER"))
                 .andExpect(jsonPath("$.data.spans[0].attributes['biz.status']").value("success"))
-                .andExpect(jsonPath("$.data.spans[0].events").isArray())
+                // events 全链路透出（T10 评审 Critical：DDL events_json 列 → SQL SELECT → EventNode 映射），
+                // 预置非空事件并逐字段断言，杜绝「恒空数组」掩盖链路断裂
+                .andExpect(jsonPath("$.data.spans[0].events.length()").value(2))
+                .andExpect(jsonPath("$.data.spans[0].events[0].name").value("biz.suspend_start"))
+                .andExpect(jsonPath("$.data.spans[0].events[0].time").value("2026-09-15T10:00:01Z"))
+                .andExpect(jsonPath("$.data.spans[0].events[0].attributes['biz.biz_id']").value("s-root"))
+                .andExpect(jsonPath("$.data.spans[0].events[1].name").value("biz.resume"))
+                .andExpect(jsonPath("$.data.spans[0].events[1].attributes").isEmpty())
                 .andExpect(jsonPath("$.data.spans[1].spanId").value("s-child"))
                 .andExpect(jsonPath("$.data.spans[1].parentSpanId").value("s-root"))
                 .andExpect(jsonPath("$.data.spans[1].kind").value(2))
@@ -257,7 +269,10 @@ class QueryApiSeedDataIntegrationTest {
                 .andExpect(jsonPath("$.data.spans[1].attributes['http.request.method']").value("GET"))
                 .andExpect(jsonPath("$.data.spans[1].attributes['http.route']").value("/checkout"))
                 .andExpect(jsonPath("$.data.spans[1].attributes['http.response.status_code']").value(200))
-                .andExpect(jsonPath("$.data.spans[1].attributes['nl.duration_ms']").value(40));
+                .andExpect(jsonPath("$.data.spans[1].attributes['nl.duration_ms']").value(40))
+                // 无事件 span：列缺省 DEFAULT '[]' → 空数组
+                .andExpect(jsonPath("$.data.spans[1].events").isArray())
+                .andExpect(jsonPath("$.data.spans[1].events.length()").value(0));
     }
 
     @Test
@@ -296,7 +311,11 @@ class QueryApiSeedDataIntegrationTest {
                 .andExpect(jsonPath("$.data.scope.name").value("nl-observe"))
                 .andExpect(jsonPath("$.data.attributes['biz.status']").value("success"))
                 .andExpect(jsonPath("$.data.attributes['biz.total_suspended_ms']").value(100))
-                .andExpect(jsonPath("$.data.events").isArray());
+                // 单 span 详情 events 全字段（name/time/attributes）
+                .andExpect(jsonPath("$.data.events.length()").value(2))
+                .andExpect(jsonPath("$.data.events[0].name").value("biz.suspend_start"))
+                .andExpect(jsonPath("$.data.events[0].time").value("2026-09-15T10:00:01Z"))
+                .andExpect(jsonPath("$.data.events[0].attributes['biz.biz_id']").value("s-root"));
     }
 
     @Test
