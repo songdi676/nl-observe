@@ -55,6 +55,25 @@ public final class SlidingWindowRateLimiter {
     }
 
     /**
+     * 低频清扫：移除窗口已全过期的 key（评审 F2/Minor：窗口表否则只增不减——
+     * 同 key 惰性清理无法回收长期不再出现的源 IP，进程长期运行内存随"曾出现过的
+     * 白名单内源 IP 数"单调增长，NAT/LB 轮换源 IP 场景尤甚）。
+     * 由 EmbeddedCollectorConfig 的 Vert.x 周期定时器低频调用，成本 O(keyCount)。
+     */
+    public void evictIdle() {
+        windows.entrySet().removeIf(entry -> {
+            ArrayDeque<Long> window = entry.getValue();
+            synchronized (window) {
+                long now = clockMillis.getAsLong();
+                while (!window.isEmpty() && window.peekFirst() <= now - WINDOW_MILLIS) {
+                    window.removeFirst();
+                }
+            }
+            return window.isEmpty();
+        });
+    }
+
+    /**
      * 当前持有的 key 数（诊断/测试用）。
      */
     public int keyCount() {

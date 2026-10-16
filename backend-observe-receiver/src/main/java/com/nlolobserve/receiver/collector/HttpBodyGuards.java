@@ -1,5 +1,6 @@
 package com.nlolobserve.receiver.collector;
 
+import com.nlolobserve.receiver.filter.ContentLengths;
 import io.vertx.core.http.HttpHeaders;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpVersion;
@@ -24,7 +25,7 @@ final class HttpBodyGuards {
     static void checkBodyOrNext(RoutingContext ctx) {
         HttpServerRequest request = ctx.request();
 
-        long contentLength = parseContentLength(request);
+        long contentLength = ContentLengths.parse(request);
         boolean hasTransferEncoding = request.version() == HttpVersion.HTTP_2
                 || request.headers().contains(HttpHeaders.TRANSFER_ENCODING);
 
@@ -48,18 +49,5 @@ final class HttpBodyGuards {
         }
 
         ctx.next();
-    }
-
-    private static long parseContentLength(HttpServerRequest request) {
-        String header = request.getHeader(HttpHeaders.CONTENT_LENGTH);
-        if (header == null) {
-            return -1;
-        }
-        try {
-            long parsed = Long.parseLong(header.trim());
-            return parsed < 0 ? -1 : parsed;
-        } catch (NumberFormatException e) {
-            return -1;
-        }
     }
 }

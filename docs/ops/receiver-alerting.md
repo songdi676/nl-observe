@@ -8,7 +8,7 @@ Prometheus/告警平台（T10+ 运维视图）的基线。
 | 指标名（Micrometer 规范名） | Prometheus 名 | 标签 | 语义 | 引入任务 |
 |---|---|---|---|---|
 | `nl.receiver.dropped` | `nl_receiver_dropped` | — | Kafka 发送快速失败（max-block 5s）后丢弃的消息计数：OTLP 入口对客户端仍返回 200（避免浏览器端重试风暴），数据实际未落 Kafka，靠本计数暴露 | T05 |
-| `nl.receiver.rejected` | `nl_receiver_rejected` | `reason=ip\|size\|rate` | 入口安全过滤器主动拒绝计数（T06）：`ip`=IP 白名单外 403、`size`=请求体超 max-request-bytes 413、`rate`=超 rate-limit-per-min 429 | T06 |
+| `nl.receiver.rejected` | `nl_receiver_rejected` | `reason=ip\|size\|rate` | 入口安全过滤器主动拒绝计数（T06）：`ip`=IP 白名单外 403（**OTLP 三入口与 MVC /config/producer 均计入**，两侧共用本指标）、`size`=请求体超 max-request-bytes 413、`rate`=超 rate-limit-per-min 429 | T06 |
 
 > **暴露前置条件（现状说明）**：receiver 当前以进程内 `SimpleMeterRegistry` 注册上述
 > 计数器（未引入 actuator）。接入 Prometheus 需要后续跟进项：引入
@@ -70,7 +70,23 @@ observe:
     rate-limit-per-min: 600                               # 每客户端 IP 每分钟上限（滑动窗口），超限 429/42901
 ```
 
-## 4. 运维判读
+## 4. 部署核对清单（T06 评审 F8 留痕）
+
+- 默认 `OBSERVE_ALLOWED_CIDRS` 为 `10.0.0.0/8`（偏宽）：生产部署**必须**按实际出口收紧，
+  未收紧即等于内网全域可注入遥测（威胁模型见 §5 备注）。
+- receiver 启动日志会打印生效安全配置（`白名单=… rate-limit-per-min=… max-request-bytes=…`）
+  与 OTLP 端口——部署/变更后核对启动日志即知实际生效值。
+- `allowed-cidrs` 配错（非法 CIDR/空白名单）在**应用构造期 fail-fast** 拒启动，不存在
+  "静默放行一切"或"静默拒绝一切后无人知晓"的中间态（空白名单语义=拒绝一切，fail-closed）。
+
+### 备注：应用层认证缺位（既定设计，评审 F7）
+
+OTLP 摄取当前无应用层认证，控制面仅为网络层 CIDR 白名单：白名单内（默认 10/8 全域）
+任意主机可注入伪造 telemetry（span/metric/log 投毒），`rejected` 指标对此无感。
+这是 T06 既定设计（质疑者2 R1：信任边界=网关/网络层单点）；后续 token/mTLS 鉴权
+为跟进项，威胁模型与本文档一并评审。
+
+## 5. 运维判读
 
 - `dropped` 上涨而入口仍 200：**静默数据丢失**——优先查 Kafka（broker 存活、topic 存在、
   网络/凭证），入口侧无需处理（AC-10 设计行为）。

@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nlolobserve.receiver.metrics.RejectedCounter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.vertx.core.Handler;
+import io.vertx.core.MultiMap;
 import io.vertx.core.internal.http.HttpServerRequestInternal;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpHeaders;
@@ -64,6 +65,7 @@ class OtlpSecurityFilterTest {
         response = mock(HttpServerResponse.class);
         bodyHandlerRef = new AtomicReference<>();
         when(request.response()).thenReturn(response);
+        when(request.headers()).thenReturn(HttpHeaders.headers()); // 默认无 TE 头（真实服务端恒非 null）
         when(response.setStatusCode(anyInt())).thenReturn(response);
         when(response.putHeader(any(CharSequence.class), any(CharSequence.class))).thenReturn(response);
         doAnswer(inv -> {
@@ -204,5 +206,45 @@ class OtlpSecurityFilterTest {
         assertThat(bodyHandlerRef.get()).as("CL 非法应按 chunked 口径注册 bodyHandler").isNotNull();
         bodyHandlerRef.get().handle(Buffer.buffer("abcde"));
         assertThat(downstreamCalls).hasValue(1);
+    }
+
+    @Test
+    void contentLengthWithTransferEncoding_goesCumulativePath_notDirectPassthrough() {
+        // 评审 F1：CL 与 TE:chunked 并存时 RFC 7230 §3.3.3 规定 TE 优先、CL 被忽略——
+        // 不得按（可被忽略的小）CL 直通放行，必须走累计体积判定（升级防御线）
+        remoteIs("127.0.0.1");
+        contentLength("5");
+        // vertx 5.1.8：request.headers() 返回 MultiMap（HttpHeaders 仅为常量接口）
+        MultiMap headers = MultiMap.caseInsensitiveMultiMap();
+        headers.add(HttpHeaders.TRANSFER_ENCODING, "chunked");
+        when(request.headers()).thenReturn(headers);
+
+        newFilter(MAX_BYTES).handle(request);
+        assertThat(bodyHandlerRef.get()).as("CL+TE 并存必须注册 bodyHandler 走累计判定，不得直通").isNotNull();
+        assertThat(downstreamCalls).hasValue(0);
+        // ≤上限 的累计体仍经重放包装放行
+        bodyHandlerRef.get().handle(Buffer.buffer("abcde"));
+        assertThat(downstreamCalls).as("≤上限 chunked 体经重放包装放行").hasValue(1);
+    }
+
+    @Test
+    void nonInternalRequestOnChunkedPath_rejects400_failClosed() throws Exception {
+        // 评审 F4：chunked 通路的 instanceof 守卫失败时不得直通（直通=无体积兜底放行，
+        // 库 checkBody 体积判定已被取代）——fail-closed 拒绝
+        HttpServerRequest plain = mock(HttpServerRequest.class);
+        HttpServerResponse plainResponse = mock(HttpServerResponse.class);
+        when(plain.response()).thenReturn(plainResponse);
+        when(plain.remoteAddress()).thenReturn(SocketAddress.inetSocketAddress(40002, "127.0.0.1"));
+        when(plain.headers()).thenReturn(HttpHeaders.headers());
+        when(plainResponse.setStatusCode(anyInt())).thenReturn(plainResponse);
+        when(plainResponse.putHeader(any(CharSequence.class), any(CharSequence.class))).thenReturn(plainResponse);
+
+        newFilter(MAX_BYTES).handle(plain);
+
+        verify(plainResponse).setStatusCode(400);
+        var captor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(plainResponse).end(captor.capture());
+        assertThat(new ObjectMapper().readTree(captor.getValue()).path("code").asInt()).isEqualTo(40001);
+        assertThat(downstreamCalls).as("非 internal 请求不得直通下游").hasValue(0);
     }
 }

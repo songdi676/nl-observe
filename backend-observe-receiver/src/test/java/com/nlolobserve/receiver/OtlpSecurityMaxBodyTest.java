@@ -12,14 +12,23 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 
+import java.util.concurrent.Flow;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.mishmash.opentelemetry.server.collector.Span;
+import io.mishmash.opentelemetry.server.collector.SpansSubscriber;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 
 /**
  * T06 验收 #1（集成）：请求体上限（observe.security.max-request-bytes，测试配置 10485760=10MB）。
@@ -39,6 +48,10 @@ class OtlpSecurityMaxBodyTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static final HttpClient CLIENT = HttpClient.newHttpClient();
+
+    /** 替换 Kafka 写入订阅者：成功通路用例断言端到端投递（同 OtlpSubscriberDeliveryTest 口径） */
+    @MockitoBean
+    private SpansSubscriber spansSubscriber;
 
     @DynamicPropertySource
     static void randomOtlpPort(DynamicPropertyRegistry registry) {
@@ -60,8 +73,26 @@ class OtlpSecurityMaxBodyTest {
     @Test
     void chunkedBodyElevenMb_returns413() throws Exception {
         // 无 Content-Length 的分块上传：过滤器须按累计字节判定，不得因 CL 缺省绕过上限
-        int status = chunkedPost("/v1/traces", ELEVEN_MB);
+        byte[] filler = new byte[ELEVEN_MB];
+        java.util.Arrays.fill(filler, (byte) 'a');
+        int status = chunkedPost("/v1/traces", filler);
         assertThat(status).as("chunked 11MB（>10MB 上限）应 413").isEqualTo(413);
+    }
+
+    @Test
+    void chunkedBodyWithinLimit_returns200AndDeliveredToSubscriber() throws Exception {
+        // T06 评审 Major-1 回归钩子：chunked ≤上限 的正常流量走 ChunkedRequestReplay
+        // 重放通路端到端（200 + 订阅者收到投递）——升级 vertx 后重放语义一旦破坏，
+        // 全部 chunked 正常流量将静默 500，本用例必红（见 ChunkedRequestReplay javadoc）
+        byte[] body = readResource("otlp/sample-traces.json").getBytes(StandardCharsets.UTF_8);
+        int status = chunkedPost("/v1/traces", body);
+        assertThat(status).as("chunked ≤上限 的合法 OTLP 应 200（重放包装与库通路兼容）").isEqualTo(200);
+
+        // onSubscribe 在上下文启动 subscribe() 时即被调用：从已记录调用取回 Subscription 补请求
+        ArgumentCaptor<Flow.Subscription> subscription = ArgumentCaptor.forClass(Flow.Subscription.class);
+        verify(spansSubscriber).onSubscribe(subscription.capture());
+        subscription.getValue().request(Long.MAX_VALUE);
+        verify(spansSubscriber, timeout(3000).atLeastOnce()).onNext(any(Span.class));
     }
 
     @Test
@@ -83,9 +114,10 @@ class OtlpSecurityMaxBodyTest {
 
     /**
      * 原始 socket 发送 Transfer-Encoding: chunked 请求（无 Content-Length），返回响应状态码。
-     * 分块写入放独立线程（与 RawHttpPost 同理：服务端提前拒绝/断开时主线程不挂死）。
+     * 体按 1MB 分块写出。分块写入放独立线程（与 RawHttpPost 同理：服务端提前拒绝/断开时
+     * 主线程不挂死）。
      */
-    private static int chunkedPost(String path, int totalBytes) throws Exception {
+    private static int chunkedPost(String path, byte[] body) throws Exception {
         try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress("127.0.0.1", OTLP_PORT), 5000);
             socket.setSoTimeout(30_000);
@@ -98,23 +130,15 @@ class OtlpSecurityMaxBodyTest {
                             + "Transfer-Encoding: chunked\r\n\r\n").getBytes(StandardCharsets.UTF_8);
                     out.write(head);
 
-                    byte[] filler = new byte[1024 * 1024];
-                    java.util.Arrays.fill(filler, (byte) 'a');
-                    int chunk = filler.length;
+                    int chunk = 1024 * 1024;
                     int written = 0;
-                    while (written + chunk < totalBytes) {
-                        out.write(hex(chunk).getBytes(StandardCharsets.UTF_8));
+                    while (written < body.length) {
+                        int n = Math.min(chunk, body.length - written);
+                        out.write(hex(n).getBytes(StandardCharsets.UTF_8));
                         out.write("\r\n".getBytes(StandardCharsets.UTF_8));
-                        out.write(filler);
+                        out.write(body, written, n);
                         out.write("\r\n".getBytes(StandardCharsets.UTF_8));
-                        written += chunk;
-                    }
-                    int rest = totalBytes - written;
-                    if (rest > 0) {
-                        out.write(hex(rest).getBytes(StandardCharsets.UTF_8));
-                        out.write("\r\n".getBytes(StandardCharsets.UTF_8));
-                        out.write(filler, 0, rest);
-                        out.write("\r\n".getBytes(StandardCharsets.UTF_8));
+                        written += n;
                     }
                     out.write("0\r\n\r\n".getBytes(StandardCharsets.UTF_8));
                     out.flush();

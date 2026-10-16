@@ -6,6 +6,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nlolobserve.receiver.config.SecurityFilterProperties;
+import com.nlolobserve.receiver.metrics.RejectedCounter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.servlet.FilterChain;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,6 +26,7 @@ class IpWhitelistFilterTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private SecurityFilterProperties properties;
+    private RejectedCounter rejectedCounter;
     private IpWhitelistFilter filter;
     private final AtomicBoolean chainInvoked = new AtomicBoolean();
     private final FilterChain chain = (req, res) -> chainInvoked.set(true);
@@ -32,7 +35,8 @@ class IpWhitelistFilterTest {
     void setUp() {
         properties = new SecurityFilterProperties();
         properties.setAllowedCidrs(List.of("127.0.0.1/32", "10.0.0.0/8"));
-        filter = new IpWhitelistFilter(properties, MAPPER);
+        rejectedCounter = new RejectedCounter(new SimpleMeterRegistry());
+        filter = new IpWhitelistFilter(properties, rejectedCounter, MAPPER);
         chainInvoked.set(false);
     }
 
@@ -74,6 +78,9 @@ class IpWhitelistFilterTest {
         assertThat(response.getStatus()).isEqualTo(403);
         JsonNode json = MAPPER.readTree(response.getContentAsString());
         assertThat(json.path("code").asInt()).isEqualTo(40301);
+        // T06 评审 Minor：MVC 侧拒绝须计 nl.receiver.rejected{reason=ip}（与 OTLP 入口同口径，
+        // 文档告警描述"OTLP/MVC 入口"由此成立）
+        assertThat(rejectedCounter.count(RejectedCounter.REASON_IP)).isEqualTo(1.0);
     }
 
     @Test
@@ -93,7 +100,7 @@ class IpWhitelistFilterTest {
     void invalidSecurityProperties_failsFast() {
         SecurityFilterProperties broken = new SecurityFilterProperties();
         broken.setMaxRequestBytes(0);
-        assertThatThrownBy(() -> new IpWhitelistFilter(broken, MAPPER))
+        assertThatThrownBy(() -> new IpWhitelistFilter(broken, rejectedCounter, MAPPER))
                 .isInstanceOf(IllegalStateException.class);
     }
 }

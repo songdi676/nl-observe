@@ -22,6 +22,7 @@ import io.mishmash.opentelemetry.server.collector.TracesCollector;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpServer;
+import io.vertx.core.http.HttpServerOptions;
 import io.vertx.ext.web.Router;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +49,13 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
     /** Vert.x 启停操作等待上限（秒）：listen/close 均为本地操作，超时即环境异常 */
     private static final long OPERATION_TIMEOUT_SEC = 10;
 
+    /** 连接 idle 超时（秒，T06 评审 Minor：slow-loris 对策）——合法 CL 后缓慢滴写 body 会
+     *  无限阻塞库的 VertxInputStream（worker 线程），idle 超时断连收敛 worker 池占用 */
+    private static final int IDLE_TIMEOUT_SEC = 30;
+
+    /** 限流窗口表清扫周期（毫秒，评审 F2：移除全过期 key，防内存单调增长） */
+    private static final long EVICT_SWEEP_MILLIS = 600_000L;
+
     private final OtlpProperties otlpProperties;
     private final SecurityFilterProperties securityProperties;
     private final SpansSubscriber spansSubscriber;
@@ -55,12 +63,17 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
     private final LogsSubscriber logsSubscriber;
     private final RejectedCounter rejectedCounter;
     private final ObjectMapper objectMapper;
+    /** 白名单构造期解析（评审 Nit：与数值参数同点 fail-fast——配错时 Bean 构造即失败，
+     *  不留到 start() 已创建 Vert.x/collector 之后才靠关闭钩子回收） */
+    private final CidrMatcher cidrMatcher;
 
     private Vertx vertx;
     private HttpServer httpServer;
     private TracesCollector tracesCollector;
     private MetricsCollector metricsCollector;
     private LogsCollector logsCollector;
+    private SlidingWindowRateLimiter rateLimiter;
+    private long evictTimerId = -1;
     private volatile boolean running;
 
     /**
@@ -84,6 +97,7 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
         this.rejectedCounter = rejectedCounter;
         this.objectMapper = objectMapper;
         securityProperties.validate();
+        this.cidrMatcher = CidrMatcher.of(securityProperties.getAllowedCidrs());
     }
 
     @Override
@@ -104,16 +118,22 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
         logsCollector.bind(router);
         // T06：入口安全过滤器（白名单 403 → 限流 429 → 体积 413）挂在 Router 之前；
         // 放行后由本过滤器以 router 为下游续链（router 本身即 Handler<HttpServerRequest>）
-        CidrMatcher cidrMatcher = CidrMatcher.of(securityProperties.getAllowedCidrs());
-        SlidingWindowRateLimiter rateLimiter =
-                new SlidingWindowRateLimiter(securityProperties.getRateLimitPerMin(), System::currentTimeMillis);
+        rateLimiter = new SlidingWindowRateLimiter(securityProperties.getRateLimitPerMin(),
+                System::currentTimeMillis);
         OtlpSecurityFilter securityFilter = new OtlpSecurityFilter(cidrMatcher,
                 rateLimiter,
                 securityProperties.getMaxRequestBytes(),
                 rejectedCounter,
                 objectMapper,
                 router);
-        httpServer = vertx.createHttpServer().requestHandler(securityFilter);
+        // idle 超时（评审 Minor：slow-loris 对策）：合法 CL 后缓慢滴写 body 的客户端会无限
+        // 阻塞库 parseHttpRequest 的 VertxInputStream.take()（worker 池 20 线程可被耗尽），
+        // idle 超时断连收敛该向量（残余见 OtlpSecurityFilter javadoc）
+        httpServer = vertx.createHttpServer(
+                new HttpServerOptions().setIdleTimeout(IDLE_TIMEOUT_SEC)) // vertx 5：单位秒
+                .requestHandler(securityFilter);
+        // 限流窗口表低频清扫（评审 F2）：移除全过期 key，防长期运行内存单调增长
+        evictTimerId = vertx.setPeriodic(EVICT_SWEEP_MILLIS, id -> rateLimiter.evictIdle());
         try {
             await(httpServer.listen(otlpProperties.getPort()), "OTLP/HTTP listen");
         } catch (IllegalStateException e) {
@@ -122,7 +142,10 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
             throw e;
         }
         running = true;
-        LOG.info("内嵌 collector 已启动：OTLP/HTTP 端口 {}（gRPC 未启用）", otlpProperties.getPort());
+        // 生效安全配置随启动日志留痕（评审 F8：默认 10/8 偏宽，部署核对须可见实际白名单/阈值）
+        LOG.info("内嵌 collector 已启动：OTLP/HTTP 端口 {}（gRPC 未启用）白名单={} rate-limit-per-min={} max-request-bytes={}",
+                otlpProperties.getPort(), securityProperties.getAllowedCidrs(),
+                securityProperties.getRateLimitPerMin(), securityProperties.getMaxRequestBytes());
     }
 
     @Override
@@ -134,6 +157,10 @@ public class EmbeddedCollectorConfig implements SmartLifecycle {
 
     /** 释放 collector 与 Vert.x 资源（stop 与 start 失败回滚共用） */
     private void releaseResources() {
+        if (vertx != null && evictTimerId >= 0) {
+            vertx.cancelTimer(evictTimerId);
+            evictTimerId = -1;
+        }
         if (tracesCollector != null) {
             tracesCollector.close();
         }

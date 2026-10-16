@@ -103,6 +103,17 @@ class CidrMatcherTest {
         assertThat(matcher.isAllowed("not.a.valid-ip")).isFalse();
     }
 
+    @Test
+    void stringLookup_nullBlankHostname_failClosedWithoutDns() {
+        // 评审 F5：InetAddress.getByName(null) 返回回环——null/空白/主机名形态必须在
+        // 字面量守卫处拒绝（容器 getRemoteAddr 边缘形态不得命中含回环的白名单，且不触发 DNS）
+        CidrMatcher withLoopback = CidrMatcher.of(List.of("127.0.0.1/32", "10.0.0.0/8"));
+        assertThat(withLoopback.isAllowed((String) null)).isFalse();
+        assertThat(withLoopback.isAllowed("")).isFalse();
+        assertThat(withLoopback.isAllowed("   ")).isFalse();
+        assertThat(withLoopback.isAllowed("localhost")).isFalse();
+    }
+
     private static InetAddress ip(String literal) throws UnknownHostException {
         return InetAddress.getByName(literal);
     }

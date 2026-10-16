@@ -89,9 +89,15 @@ public final class CidrMatcher {
     }
 
     /**
-     * 按 IP 字面量判定（servlet getRemoteAddr 口径）；解析失败按拒绝（fail-closed）。
+     * 按 IP 字面量判定（servlet getRemoteAddr 口径）；非字面量按拒绝（fail-closed）。
+     * 严格字面量守卫（评审 F5/Nit）：null/空白/主机名一律拒绝——
+     * InetAddress.getByName(null) 返回回环地址（容器边缘形态会意外命中含回环的白名单），
+     * 主机名形态会触发 DNS 查询（与条目侧"禁止主机名"口径一致，防污染/TOCTOU）。
      */
     public boolean isAllowed(String ipLiteral) {
+        if (!isIpLiteral(ipLiteral)) {
+            return false;
+        }
         try {
             return isAllowed(InetAddress.getByName(ipLiteral));
         } catch (UnknownHostException | RuntimeException e) {

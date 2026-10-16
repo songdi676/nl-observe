@@ -79,6 +79,23 @@ class SlidingWindowRateLimiterTest {
     }
 
     @Test
+    void evictIdleRemovesOnlyFullyExpiredKeys() {
+        // 评审 F2：窗口表须可回收长期不再出现的源 IP（否则内存单调增长）
+        FakeClock clock = new FakeClock();
+        SlidingWindowRateLimiter limiter = new SlidingWindowRateLimiter(5, clock);
+
+        assertThat(limiter.tryAcquire("old")).isTrue();   // t=0
+        clock.advance(40_000);
+        assertThat(limiter.tryAcquire("fresh")).isTrue(); // t=40s
+        clock.advance(25_000);                            // t=65s：old 出窗（>60s），fresh 仍在窗内
+        limiter.evictIdle();
+
+        assertThat(limiter.keyCount()).as("仅全过期 key 被清扫，活跃 key 保留").isEqualTo(1);
+        assertThat(limiter.tryAcquire("fresh")).as("活跃 key 不受清扫影响").isTrue();
+        assertThat(limiter.tryAcquire("old")).as("被清扫的 key 可重新建窗").isTrue();
+    }
+
+    @Test
     void zeroOrNegativeLimit_failsFast() {
         assertThatThrownBy(() -> new SlidingWindowRateLimiter(0, () -> 0L))
                 .isInstanceOf(IllegalArgumentException.class);

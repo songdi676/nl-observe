@@ -21,7 +21,10 @@ import io.vertx.core.internal.http.HttpServerRequestWrapper;
  * - handler/endHandler 按序重放缓冲体与结束事件（兼容 VertxInputStream 分支，防御性）
  *
  * 注意：基于 vertx-core internal 包（HttpServerRequestWrapper），当前随 collector-embedded
- * 锁定 vertx 5.1.8；升级 vertx 时需回归本类与 chunked 集成用例（OtlpSecurityMaxBodyTest）。
+ * 锁定 vertx 5.1.8；升级 vertx 时需回归本类与 chunked 集成用例——成功通路钩子为
+ * OtlpSecurityMaxBodyTest#chunkedBodyWithinLimit_returns200AndDeliveredToSubscriber
+ * （chunked ≤上限 → 200 + 订阅者收到投递；重放语义破坏时该用例必红），
+ * 拒绝通路见同类 chunkedBodyElevenMb_returns413。
  */
 final class ChunkedRequestReplay extends HttpServerRequestWrapper {
 
