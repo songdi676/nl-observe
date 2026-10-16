@@ -22,3 +22,13 @@ export {
   BusinessManager,
 } from './core/BusinessManager';
 export type { BizEndReason, BizStatus, BusinessState, BusinessDurationAttrs } from './core/BusinessManager';
+export {
+  ATTR_HTTP_REQUEST_METHOD,
+  ATTR_HTTP_ROUTE,
+  ATTR_HTTP_RESPONSE_STATUS_CODE,
+  ATTR_NL_DURATION_MS,
+  REST_SPAN_NAME_PREFIX,
+  recordRestSpan,
+  installRestInstrumentation,
+} from './core/rest/autoprofile';
+export type { RestInstrumentationHandle, RestRecorderDeps, RestSpanInput } from './core/rest/autoprofile';

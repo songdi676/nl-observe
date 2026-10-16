@@ -7,7 +7,8 @@
  * T13 落地：signIn/signOut 经 SigninManager 状态机（互斥：已签入再签入先隐式 sign_out）；
  * startBusiness/suspendBusiness/resumeBusiness/endBusiness 经 BusinessManager
  * （挂起/恢复/有效耗时，end 发 nl.business_duration data point）。
- * REST 自动埋点在 T14、首屏/flush 指标在 T15、vue 指令在 T16。
+ * T14 落地：REST 自动埋点（fetch/XHR 包装，rest/autoprofile）+ trackRest 手动兜底；
+ * 首屏/flush 指标在 T15、vue 指令在 T16。
  */
 import type { Tracer } from '@opentelemetry/api';
 import { WebTracerProvider } from '@opentelemetry/sdk-trace-web';
@@ -24,6 +25,12 @@ import {
   type BizEndReason,
   type BizStatus,
 } from './BusinessManager';
+import {
+  installRestInstrumentation,
+  recordRestSpan,
+  type RestInstrumentationHandle,
+  type RestRecorderDeps,
+} from './rest/autoprofile';
 
 export interface NlObserveOptions {
   serviceName?: string;
@@ -38,6 +45,8 @@ export interface NlObserveOptions {
   metricReaders?: IMetricReader[];
   /** 可注入时钟（缺省 Date.now；单测注入后有效耗时为确定性断言） */
   clock?: () => number;
+  /** REST 自动埋点（fetch/XHR 全局包装）开关，缺省 true；trackRest 手动兜底不受此开关影响 */
+  instrumentRest?: boolean;
 }
 
 export interface ResolvedOptions {
@@ -62,6 +71,8 @@ export class NlObserveClient {
   private meterProvider?: MeterProvider;
   private readonly signin = new SigninManager();
   private business?: BusinessManager;
+  private restDeps?: RestRecorderDeps;
+  private restHandle?: RestInstrumentationHandle;
 
   /** 装配 OTel provider/tracer/meter 与状态机（幂等：重复 init 返回并 warn）。 */
   init(options: NlObserveOptions = {}): void {
@@ -120,6 +131,20 @@ export class NlObserveClient {
       now: options.clock,
       emitBusinessDuration: (valueMs, attrs) => businessDurationCounter.add(valueMs, attrs),
     });
+
+    // T14：REST 埋点依赖（自动埋点与 trackRest 共用）；parent 取当前 ACTIVE 业务 root span，
+    // OTLP 自身端点自排除（防自埋点递归）
+    this.restDeps = {
+      getTracer: () => this.tracer,
+      getActiveRootSpan: () => this.business?.activeRootSpan(),
+      now: options.clock,
+      isExcludedUrl: this.resolvedOptions.otlpUrl
+        ? (url: string) => url.startsWith(this.resolvedOptions.otlpUrl as string)
+        : undefined,
+    };
+    if (options.instrumentRest !== false) {
+      this.restHandle = installRestInstrumentation(this.restDeps);
+    }
     this.isInitialized = true;
   }
 
@@ -128,8 +153,10 @@ export class NlObserveClient {
     return this.tracer;
   }
 
-  /** 关闭 provider/meterProvider（flush 剩余 span/metric）。 */
+  /** 关闭：先卸载 REST 全局包装（防 flush 期间新请求再生 span），再 flush provider/meterProvider。 */
   async shutdown(): Promise<void> {
+    this.restHandle?.uninstall();
+    this.restHandle = undefined;
     await this.provider?.shutdown();
     await this.meterProvider?.shutdown();
     this.isInitialized = false;
@@ -193,12 +220,15 @@ export class NlObserveClient {
     this.business?.end(bizId, options);
   }
 
+  /**
+   * 手动 REST 兜底（T14）：与自动埋点共享 recordRestSpan——同命名（'HTTP {METHOD}'）、
+   * 同取父（当前 ACTIVE 业务 root span，无 ACTIVE 不上报）、同白名单 4 属性；
+   * route 同样去 query。micro-app jsSandbox 下自动埋点捕获不足时的兜底路径（T21）。
+   */
   trackRest(method: string, route: string, statusCode: number, durationMs: number): void {
     if (!this.guard('trackRest')) return;
-    void method;
-    void route;
-    void statusCode;
-    void durationMs; // T14
+    if (!this.restDeps) return; // init 未装配 REST 依赖（理论不可达，防御）
+    recordRestSpan(this.restDeps, { method, route, statusCode, durationMs });
   }
 
   private guard(api: string): boolean {
