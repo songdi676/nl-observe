@@ -22,6 +22,7 @@ public final class Columns {
     public static final String SPANS_RESOURCE_JSON = "resource_json";
     public static final String SPANS_SCOPE_JSON = "scope_json";
     public static final String SPANS_ATTRIBUTES_JSON = "attributes_json";
+    public static final String SPANS_EVENTS_JSON = "events_json";
 
     public static final String METRICS_CUSTOMER_ID = "customer_id";
     public static final String METRICS_METRIC_NAME = "metric_name";

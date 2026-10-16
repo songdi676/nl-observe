@@ -6,6 +6,8 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -83,7 +85,7 @@ public class QueryRepository {
                     + Columns.SPANS_NAME + ", " + Columns.SPANS_KIND + ", "
                     + Columns.SPANS_START_TIME + ", " + Columns.SPANS_END_TIME + ", "
                     + Columns.SPANS_STATUS_CODE + ", " + Columns.SPANS_EFFECTIVE_DURATION_MS + ", "
-                    + Columns.SPANS_ATTRIBUTES_JSON
+                    + Columns.SPANS_ATTRIBUTES_JSON + ", " + Columns.SPANS_EVENTS_JSON
                     + " FROM " + TableNames.OTEL_SPANS + " FINAL"
                     + " WHERE " + Columns.SPANS_CUSTOMER_ID + " = :customerId"
                     + " AND " + Columns.SPANS_TRACE_ID + " = :traceId"
@@ -100,6 +102,7 @@ public class QueryRepository {
                     + Columns.SPANS_BIZ_CODE + ", " + Columns.SPANS_SERVICE_NAME + ", "
                     + Columns.SPANS_EFFECTIVE_DURATION_MS + ", " + Columns.SPANS_RESOURCE_JSON + ", "
                     + Columns.SPANS_SCOPE_JSON + ", " + Columns.SPANS_ATTRIBUTES_JSON
+                    + ", " + Columns.SPANS_EVENTS_JSON
                     + " FROM " + TableNames.OTEL_SPANS + " FINAL"
                     + " WHERE " + Columns.SPANS_CUSTOMER_ID + " = :customerId"
                     + " AND " + Columns.SPANS_TRACE_ID + " = :traceId"
@@ -136,6 +139,9 @@ public class QueryRepository {
     static final RowMapper<BusinessItem> BUSINESS_ITEM_MAPPER = QueryRepository::mapBusinessItem;
 
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
+    };
+
+    private static final TypeReference<List<Map<String, Object>>> EVENT_LIST_TYPE = new TypeReference<>() {
     };
 
     private final NamedParameterJdbcTemplate namedJdbc;
@@ -244,6 +250,7 @@ public class QueryRepository {
         }
         node.setEffectiveDurationMs(rs.getDouble(Columns.SPANS_EFFECTIVE_DURATION_MS));
         node.setAttributes(parseJsonMap(rs.getString(Columns.SPANS_ATTRIBUTES_JSON)));
+        node.setEvents(parseEvents(rs.getString(Columns.SPANS_EVENTS_JSON)));
         return node;
     }
 
@@ -270,6 +277,7 @@ public class QueryRepository {
         detail.setResource(parseJsonMap(rs.getString(Columns.SPANS_RESOURCE_JSON)));
         detail.setScope(parseJsonMap(rs.getString(Columns.SPANS_SCOPE_JSON)));
         detail.setAttributes(parseJsonMap(rs.getString(Columns.SPANS_ATTRIBUTES_JSON)));
+        detail.setEvents(parseEvents(rs.getString(Columns.SPANS_EVENTS_JSON)));
         return detail;
     }
 
@@ -293,6 +301,41 @@ public class QueryRepository {
         } catch (JsonProcessingException e) {
             throw new SQLException("JSON 字段解析失败: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * events_json → EventNode 列表（契约见 DdlScripts.OTEL_SPANS 注释：
+     * [{"name","time":ISO-8601 UTC,"attributes":扁平键值}]，存储写路径已从
+     * OTLP 形态转换）。null/空白/[] → 空列表（列缺省 DEFAULT '[]'）。
+     */
+    private List<SpanNode.EventNode> parseEvents(String json) throws SQLException {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        List<Map<String, Object>> raw;
+        try {
+            raw = objectMapper.readValue(json, EVENT_LIST_TYPE);
+        } catch (JsonProcessingException e) {
+            throw new SQLException("events_json 解析失败: " + e.getMessage(), e);
+        }
+        List<SpanNode.EventNode> events = new ArrayList<>(raw.size());
+        for (Map<String, Object> entry : raw) {
+            SpanNode.EventNode event = new SpanNode.EventNode();
+            Object name = entry.get("name");
+            Object time = entry.get("time");
+            Object attributes = entry.get("attributes");
+            event.setName(name == null ? "" : String.valueOf(name));
+            event.setTime(time == null ? null : String.valueOf(time));
+            if (attributes instanceof Map<?, ?> attrMap) {
+                Map<String, Object> flat = new HashMap<>(attrMap.size());
+                for (Map.Entry<?, ?> e : attrMap.entrySet()) {
+                    flat.put(String.valueOf(e.getKey()), e.getValue());
+                }
+                event.setAttributes(flat);
+            }
+            events.add(event);
+        }
+        return events;
     }
 
     private static String toIsoUtc(Timestamp timestamp) {

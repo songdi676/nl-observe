@@ -25,7 +25,8 @@ class DdlScriptsTest {
         assertTrue(ddl.contains("CLUSTER BY (customer_id, trace_id, span_id, start_time, end_time)"));
         for (String column : new String[] {"customer_id", "trace_id", "span_id", "parent_span_id",
                 "trace_state", "name", "kind", "start_time", "end_time", "status_code", "status_message",
-                "biz_code", "service_name", "effective_duration_ms", "resource_json", "scope_json", "attributes_json"}) {
+                "biz_code", "service_name", "effective_duration_ms", "resource_json", "scope_json",
+                "attributes_json", "events_json"}) {
             assertTrue(ddl.contains(column), "spans DDL 缺列: " + column);
         }
         assertTrue(ddl.contains("TIMESTAMP"), "时间列应为 Databend TIMESTAMP 类型");
