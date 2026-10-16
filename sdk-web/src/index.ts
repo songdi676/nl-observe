@@ -22,3 +22,23 @@ export {
   BusinessManager,
 } from './core/BusinessManager';
 export type { BizEndReason, BizStatus, BusinessState, BusinessDurationAttrs } from './core/BusinessManager';
+export {
+  METRIC_FIRST_SCREEN_LOAD,
+  METRIC_SDK_FLUSH,
+  FLUSH_MODE_BEACON,
+  ATTR_FLUSH,
+  ATTR_FLUSH_RESULT,
+  ATTR_DROPPED_SPANS,
+  trackFirstScreenLoad,
+} from './core/perf/metrics';
+export type { FlushResult, LcpObserverCtor, WindowLike } from './core/perf/metrics';
+export {
+  DEFAULT_FLUSH_TIMEOUT_MS,
+  DropCountingSpanExporter,
+  SendBeaconMetricExporter,
+  SendBeaconSpanExporter,
+  createOtlpHttpBeaconTransport,
+  metricsUrlFromTracesUrl,
+  setupFlushHook,
+} from './core/flush';
+export type { BeaconTransport } from './core/flush';

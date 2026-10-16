@@ -7,14 +7,21 @@
  * T13 落地：signIn/signOut 经 SigninManager 状态机（互斥：已签入再签入先隐式 sign_out）；
  * startBusiness/suspendBusiness/resumeBusiness/endBusiness 经 BusinessManager
  * （挂起/恢复/有效耗时，end 发 nl.business_duration data point）。
- * REST 自动埋点在 T14、首屏/flush 指标在 T15、vue 指令在 T16。
+ * T15 落地：otlpUrl 时 trace 走 SendBeaconSpanExporter（OTLP/HTTP JSON 文本 +
+ * navigator.sendBeacon），metric 走 SendBeaconMetricExporter（/v1/metrics，DELTA）；
+ * pagehide/visibilitychange=hidden → flush hook（尽力上报 nl.sdk.flush）；
+ * nl.first_screen_load 每页一个 data point（LCP 优先，load 兜底）。
+ * REST 自动埋点在 T14、vue 指令在 T16。
  */
 import type { Tracer } from '@opentelemetry/api';
 import { WebTracerProvider } from '@opentelemetry/sdk-trace-web';
 import { BatchSpanProcessor, type SpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
-import { MeterProvider, type IMetricReader } from '@opentelemetry/sdk-metrics';
+import {
+  MeterProvider,
+  PeriodicExportingMetricReader,
+  type IMetricReader,
+} from '@opentelemetry/sdk-metrics';
 import { SDK_VERSION } from './version';
 import { getGuardedClient, setGuardedClient } from './guard';
 import { SigninManager } from './SigninManager';
@@ -24,6 +31,27 @@ import {
   type BizEndReason,
   type BizStatus,
 } from './BusinessManager';
+import {
+  trackFirstScreenLoad,
+  METRIC_FIRST_SCREEN_LOAD,
+  METRIC_SDK_FLUSH,
+  ATTR_DROPPED_SPANS,
+  ATTR_FLUSH,
+  ATTR_FLUSH_RESULT,
+  FLUSH_MODE_BEACON,
+  type FirstScreenLoadTracker,
+  type LcpObserverCtor,
+  type WindowLike,
+} from './perf/metrics';
+import {
+  DropCountingSpanExporter,
+  SendBeaconMetricExporter,
+  SendBeaconSpanExporter,
+  createOtlpHttpBeaconTransport,
+  metricsUrlFromTracesUrl,
+  setupFlushHook,
+  type FlushHook,
+} from './flush';
 
 export interface NlObserveOptions {
   serviceName?: string;
@@ -32,6 +60,14 @@ export interface NlObserveOptions {
   otlpUrl?: string;
   /** BatchSpanProcessor scheduledDelayMillis；详设 §1.5 batchTimeout 默认 2000ms 可配 */
   batchTimeoutMs?: number;
+  /** 页面卸载 forceFlush 超时（详设 §4.2 默认 2000ms 可配） */
+  flushTimeoutMs?: number;
+  /** 注入 window（缺省全局探测；node/SSR → null 即不挂 flush/load 监听——单测注入 fake） */
+  windowLike?: WindowLike | null;
+  /** 注入 PerformanceObserver 构造器（缺省全局探测；显式 null = 禁用 LCP 走 load 兜底） */
+  performanceObserver?: LcpObserverCtor | null;
+  /** load 兜底首屏耗时取值（缺省 navigation loadEventEnd / performance.now()） */
+  loadTimeMs?: () => number;
   /** 附加 SpanProcessor（宿主扩展点；单测注入 SimpleSpanProcessor+InMemorySpanExporter） */
   spanProcessors?: SpanProcessor[];
   /** 附加 MetricReader（宿主扩展点；单测注入 InMemory 读取器断言 data point） */
@@ -62,6 +98,10 @@ export class NlObserveClient {
   private meterProvider?: MeterProvider;
   private readonly signin = new SigninManager();
   private business?: BusinessManager;
+  private dropCounting?: DropCountingSpanExporter;
+  private beaconMetricExporter?: SendBeaconMetricExporter;
+  private flushHook?: FlushHook;
+  private firstScreen?: FirstScreenLoadTracker;
 
   /** 装配 OTel provider/tracer/meter 与状态机（幂等：重复 init 返回并 warn）。 */
   init(options: NlObserveOptions = {}): void {
@@ -77,10 +117,29 @@ export class NlObserveClient {
     };
 
     const processors: SpanProcessor[] = [...(options.spanProcessors ?? [])];
+    const readers: IMetricReader[] = [...(options.metricReaders ?? [])];
     if (this.resolvedOptions.otlpUrl) {
+      // T15：OTLP/HTTP JSON 文本口径（sendBeacon 仅支持文本）——trace/metric 共享 transport；
+      // BSP 内建 document-hide 自动 flush 关闭，flush 语义统一由 flush hook 拥有
+      // （避免双 beacon，且每次 flush 都尽力上报 nl.sdk.flush）。
+      const transport = createOtlpHttpBeaconTransport();
+      this.dropCounting = new DropCountingSpanExporter(
+        new SendBeaconSpanExporter({ url: this.resolvedOptions.otlpUrl, transport }),
+      );
       processors.push(
-        new BatchSpanProcessor(new OTLPTraceExporter({ url: this.resolvedOptions.otlpUrl }), {
+        new BatchSpanProcessor(this.dropCounting, {
           scheduledDelayMillis: this.resolvedOptions.batchTimeoutMs,
+          disableAutoFlushOnDocumentHide: true,
+        }),
+      );
+      this.beaconMetricExporter = new SendBeaconMetricExporter({
+        url: metricsUrlFromTracesUrl(this.resolvedOptions.otlpUrl),
+        transport,
+      });
+      readers.push(
+        new PeriodicExportingMetricReader({
+          exporter: this.beaconMetricExporter,
+          exportIntervalMillis: this.resolvedOptions.batchTimeoutMs,
         }),
       );
     }
@@ -97,11 +156,8 @@ export class NlObserveClient {
     // 不 provider.register()（全局注册一次性，POC 发现 4）：显式取 tracer
     this.tracer = this.provider.getTracer('nl-observe-sdk-web', SDK_VERSION);
 
-    // T13：MeterProvider（OTLP 指标导出器在 T15/T17 接线；此处 readers 为扩展/测试注入点）
-    this.meterProvider = new MeterProvider({
-      resource,
-      readers: options.metricReaders ?? [],
-    });
+    // T13/T15：MeterProvider（otlpUrl 时挂 SendBeaconMetricReader；其余 readers 为扩展/测试注入点）
+    this.meterProvider = new MeterProvider({ resource, readers });
     // nl.business_duration 用 Counter（sum 形态）：跨层契约 backend OtlpMetricPayload
     // "sum 形态（nl.business_duration / nl.sdk.flush）"；同步 Gauge 按属性集 last-value-wins
     // 会致同码业务折叠 + cumulative 重发重复行（T13 评审 Major-1）。
@@ -120,6 +176,47 @@ export class NlObserveClient {
       now: options.clock,
       emitBusinessDuration: (valueMs, attrs) => businessDurationCounter.add(valueMs, attrs),
     });
+
+    // T15 首屏：nl.first_screen_load Counter（sum+DELTA，与 T13 口径一致）——每页仅一个 data point，
+    // LCP 优先（PerformanceObserver buffered 首批末条），无 LCP 能力时 load 事件兜底。
+    const firstScreenLoadCounter = this.meterProvider
+      .getMeter('nl-observe-sdk-web', SDK_VERSION)
+      .createCounter(METRIC_FIRST_SCREEN_LOAD, {
+        unit: 'ms',
+        description: '首屏加载（ms）：LCP 优先、load 事件兜底，每页仅一个 data point',
+      });
+    this.firstScreen = trackFirstScreenLoad({
+      emit: (valueMs) => firstScreenLoadCounter.add(valueMs),
+      performanceObserver: options.performanceObserver,
+      windowLike: options.windowLike,
+      loadTimeMs: options.loadTimeMs,
+    });
+
+    // T15 flush：pagehide / visibilitychange=hidden → forceFlush（sendBeacon OTLP/HTTP JSON），
+    // 每次尝试尽力上报 nl.sdk.flush{flush=beacon, result=ok|fail|timeout, dropped_spans=N}；
+    // flush 指标自身再导出失败（二次失败）仅 console.warn，绝不抛错（详设 §4.2）。
+    const flushCounter = this.meterProvider
+      .getMeter('nl-observe-sdk-web', SDK_VERSION)
+      .createCounter(METRIC_SDK_FLUSH, {
+        unit: '1',
+        description: 'flush 尝试结果：result=ok|fail|timeout，dropped_spans=随页面丢失的 span 数（每次尝试一个 data point）',
+      });
+    this.flushHook = setupFlushHook({
+      forceFlushAll: () =>
+        Promise.all([this.provider?.forceFlush(), this.meterProvider?.forceFlush()]).then(() => undefined),
+      getDroppedSpans: () => this.dropCounting?.getDropped() ?? 0,
+      reportFlush: (result, droppedSpans) =>
+        flushCounter.add(1, {
+          [ATTR_FLUSH]: FLUSH_MODE_BEACON,
+          [ATTR_FLUSH_RESULT]: result,
+          [ATTR_DROPPED_SPANS]: droppedSpans,
+        }),
+      flushAgain: () => this.meterProvider?.forceFlush() ?? Promise.resolve(),
+      getExportError: () => this.beaconMetricExporter?.getLastError(),
+      resetExportError: () => this.beaconMetricExporter?.resetLastError(),
+      flushTimeoutMs: options.flushTimeoutMs,
+      windowLike: options.windowLike,
+    });
     this.isInitialized = true;
   }
 
@@ -128,8 +225,12 @@ export class NlObserveClient {
     return this.tracer;
   }
 
-  /** 关闭 provider/meterProvider（flush 剩余 span/metric）。 */
+  /** 关闭 provider/meterProvider（flush 剩余 span/metric）；先摘监听（flush hook / 首屏跟踪）。 */
   async shutdown(): Promise<void> {
+    this.flushHook?.dispose();
+    this.flushHook = undefined;
+    this.firstScreen?.dispose();
+    this.firstScreen = undefined;
     await this.provider?.shutdown();
     await this.meterProvider?.shutdown();
     this.isInitialized = false;
