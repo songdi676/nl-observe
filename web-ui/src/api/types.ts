@@ -66,9 +66,10 @@ export interface BizMetric {
   count: number
 }
 
-/** §2.4 指标汇总 */
+/** §2.4 指标汇总（firstScreenLoadP95 可空：后端 Double，无首屏数据时为 null，
+ *  与 backend-observe-common MetricSummary DTO 一致） */
 export interface MetricSummary {
-  firstScreenLoadP95: number
+  firstScreenLoadP95: number | null
   perBiz: BizMetric[]
 }
 
@@ -79,7 +80,9 @@ export interface TimeRangeQuery {
   bizCode?: string
 }
 
-/** §2.4 metrics/summary：customerId 缺省 = 跨客户运维视图（后端限流） */
+/** §2.4 metrics/summary：恒带 customerId（验收口径——客户作用域查询路径，规避
+ *  跨客户运维视图限流桶 60 次/分、超限 42901）。必填性钉进编译器（评审 arch M-1）：
+ *  任何调用方漏传将落入运维视图桶，恰是 MetricsPage 刻意规避的行为 */
 export interface MetricsSummaryQuery extends TimeRangeQuery {
-  customerId?: string
+  customerId: string
 }
