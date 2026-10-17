@@ -16,6 +16,16 @@ import http from 'node:http';
 const OTLP_PORT = Number(process.env.E2E_STUB_OTLP_PORT ?? 4318);
 const QUERY_PORT = Number(process.env.E2E_STUB_QUERY_PORT ?? 8081);
 
+/** OTLP 请求体上限（评审 sec Info-4）：本机自检工具，超限直接 413 拒收 */
+const MAX_BODY_BYTES = 8 * 1024 * 1024;
+
+/** 数值字段守卫（评审 sec L-3）：畸形 OTLP 载荷的 NaN/Infinity 在入库时归 0，
+ * 避免查询期 new Date(NaN).toISOString() 抛 RangeError 拖垮整个 stub 进程 */
+function toFiniteNumber(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 /** @type {{customer: string, traceId: string, spanId: string, parentSpanId: string, name: string, kind: number, startNs: number, endNs: number, statusCode: number, attributes: Record<string, unknown>, events: {name: string}[]}[]} */
 const spans = [];
 /** @type {{customer: string, metricName: string, timeNs: number, value: number, attributes: Record<string, unknown>}[]} */
@@ -53,10 +63,10 @@ function ingestTraces(body) {
           spanId: s.spanId,
           parentSpanId: s.parentSpanId ?? '',
           name: s.name,
-          kind: s.kind ?? 0,
-          startNs: Number(s.startTimeUnixNano ?? 0),
-          endNs: Number(s.endTimeUnixNano ?? 0),
-          statusCode: s.status?.code ?? 0,
+          kind: toFiniteNumber(s.kind ?? 0),
+          startNs: toFiniteNumber(s.startTimeUnixNano ?? 0),
+          endNs: toFiniteNumber(s.endTimeUnixNano ?? 0),
+          statusCode: toFiniteNumber(s.status?.code ?? 0),
           attributes: attrMap(s.attributes),
           events: (s.events ?? []).map((e) => ({ name: e.name })),
         });
@@ -76,8 +86,8 @@ function ingestMetrics(body) {
           metricPoints.push({
             customer: String(res['nl.customer_id'] ?? ''),
             metricName: m.name,
-            timeNs: Number(dp.timeUnixNano ?? 0),
-            value: Number(raw ?? 0),
+            timeNs: toFiniteNumber(dp.timeUnixNano ?? 0),
+            value: toFiniteNumber(raw ?? 0),
             attributes: attrMap(dp.attributes),
           });
         }
@@ -98,8 +108,10 @@ function utcDateOf(ns) {
 }
 
 function inWindow(ns, from, to) {
+  // 对齐真实后端（评审 corr Minor-2）：QueryRepository 的 toExclusive = to 次日
+  // 0 点（UTC），即 to 当日整天包含在内——日期粒度下等价于 d <= to
   const d = utcDateOf(ns);
-  return d >= from && d < to;
+  return d >= from && d <= to;
 }
 
 function p95(values) {
@@ -132,7 +144,14 @@ function handleQuery(req, res, url) {
   const metricsMatch = url.pathname === '/api/observe/metrics/summary';
 
   if (custMatch) {
-    const customerId = decodeURIComponent(custMatch[1]);
+    // 畸形百分号编码（如 %zz）会抛 URIError——不捕获则整个 stub 进程崩溃
+    // （评审 sec L-2）；按参数缺失口径回 400/40001
+    let customerId;
+    try {
+      customerId = decodeURIComponent(custMatch[1]);
+    } catch {
+      return json(400, envelope(40001, '路径参数百分号编码非法', null));
+    }
 
     if (custMatch[2] === 'businesses') {
       const from = parseDate(url.searchParams.get('from'));
@@ -209,16 +228,23 @@ function handleQuery(req, res, url) {
       row.count += 1;
       if (s.attributes['biz.status'] === 'success') row.success += 1;
     }
+    const firstScreenP95 = p95(firstScreen);
+    const perBizRows = perBiz
+      .map((r) => ({
+        bizCode: r.bizCode,
+        effectiveDurationP95: p95(r.values) ?? 0,
+        successRate: r.count ? r.success / r.count : 0,
+        count: r.count,
+      }))
+      .sort((x, y) => x.bizCode.localeCompare(y.bizCode));
+    // 对齐真实后端（评审 corr Minor-2）：MetricSummaryService 两指标皆空时抛
+    // NOT_FOUND——stub 此前返回 200+null 属契约镜像漂移，会误导自检排障
+    if (firstScreenP95 === null && perBizRows.length === 0) {
+      return json(404, envelope(40401, '无数据', null));
+    }
     return json(200, envelope(0, 'ok', {
-      firstScreenLoadP95: p95(firstScreen),
-      perBiz: perBiz
-        .map((r) => ({
-          bizCode: r.bizCode,
-          effectiveDurationP95: p95(r.values) ?? 0,
-          successRate: r.count ? r.success / r.count : 0,
-          count: r.count,
-        }))
-        .sort((x, y) => x.bizCode.localeCompare(y.bizCode)),
+      firstScreenLoadP95: firstScreenP95,
+      perBiz: perBizRows,
     }));
   }
 
@@ -228,8 +254,20 @@ function handleQuery(req, res, url) {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    let size = 0;
+    let tooLarge = false;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > MAX_BODY_BYTES) {
+        tooLarge = true; // 继续排空流但不再留存（评审 sec Info-4：内存无界增长兜底）
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      if (tooLarge) reject(new Error('BODY_TOO_LARGE'));
+      else resolve(Buffer.concat(chunks).toString('utf8'));
+    });
     req.on('error', reject);
   });
 }
@@ -248,7 +286,19 @@ const otlpServer = http.createServer(async (req, res) => {
     res.writeHead(405).end();
     return;
   }
-  const raw = await readBody(req);
+  let raw;
+  try {
+    raw = await readBody(req);
+  } catch (err) {
+    if (err.message === 'BODY_TOO_LARGE') {
+      res.writeHead(413, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ code: 40001, message: '请求体超 8MiB 上限', data: null }));
+    } else {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ code: 40001, message: '请求体读取失败', data: null }));
+    }
+    return;
+  }
   try {
     const body = JSON.parse(raw);
     if (req.url.startsWith('/v1/traces')) ingestTraces(body);
@@ -262,9 +312,26 @@ const otlpServer = http.createServer(async (req, res) => {
 });
 
 const queryServer = http.createServer((req, res) => {
-  const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+  let url;
+  try {
+    url = new URL(req.url ?? '/', 'http://127.0.0.1');
+  } catch {
+    res.writeHead(400).end(); // 畸形请求行不崩进程（与 sec L-2 同类健壮性）
+    return;
+  }
   handleQuery(req, res, url);
 });
+
+// 端口被占（如上次 run-local 被 SIGKILL 遗留的孤儿 stub）时以非零码显式退出，
+// 而不是未捕获 EADDRINUSE 崩溃（评审 arch m-5）
+function listenFatal(name) {
+  return (err) => {
+    console.error(`[stub] ${name} 监听失败（端口被占？）：${err.message}`);
+    process.exit(1);
+  };
+}
+otlpServer.on('error', listenFatal('OTLP 入口'));
+queryServer.on('error', listenFatal('查询 API'));
 
 otlpServer.listen(OTLP_PORT, '127.0.0.1', () => {
   console.log(`[stub] OTLP 入口 http://127.0.0.1:${OTLP_PORT}/v1/{traces,metrics,logs}`);

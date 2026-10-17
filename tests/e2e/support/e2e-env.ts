@@ -4,12 +4,24 @@
  * env-gate：E2E_BACKEND_URL 未设置 → e2eEnabled()=false，spec 内 test.skip。
  * E2E_BACKEND_URL = 查询服务基址（如 http://10.1.8.33:8081，详设 §2 接口前缀
  * /api/observe）；OTLP traces 端点缺省同主机端口 4318（receiver observe.otlp.port
- * 默认，详设 §5），E2E_OTLP_URL 可覆盖。宿主页缺省 http://127.0.0.1:4173
- * （tests/e2e/host vite dev，E2E_HOST_URL/E2E_HOST_PORT 可覆盖）。
+ * 默认，详设 §5），E2E_OTLP_URL 覆盖全 URL / E2E_OTLP_PORT 只覆盖派生端口。
+ * 宿主页缺省 http://127.0.0.1:4173（tests/e2e/host vite dev，E2E_HOST_PORT 覆盖
+ * 端口——与 playwright.config.ts、host/vite.config.ts 三处同读一变量，口径一致；
+ * 不设 E2E_HOST_URL 整 URL 覆盖，避免 config 的 webServer 与 spec 导航地址分裂，
+ * 评审 arch m-1）。
  *
  * 查询 API 契约（详设 §2/§4.1）：统一信封 {code,message,data}；无数据 404/40401
  * ——轮询期视为「尚未到达」而非失败。
  */
+import type { Page } from '@playwright/test';
+
+/** 页内冲刷（两 spec 共用，评审 arch m-7①）：shutdown 触发 BSP/metric reader forceFlush。 */
+export async function flushPage(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __e2eFlush?: () => Promise<void> };
+    return w.__e2eFlush?.();
+  });
+}
 
 export function e2eEnabled(): boolean {
   return Boolean(process.env.E2E_BACKEND_URL);
@@ -34,7 +46,7 @@ export function otlpTracesUrl(): string {
 
 /** 宿主页地址（携带 customer/otlp 查询参数，宿主 init 时读取）。 */
 export function hostUrl(params: { customer: string; otlp: string }): string {
-  const base = process.env.E2E_HOST_URL ?? `http://127.0.0.1:${process.env.E2E_HOST_PORT ?? '4173'}`;
+  const base = `http://127.0.0.1:${process.env.E2E_HOST_PORT ?? '4173'}`;
   const u = new URL(base);
   u.searchParams.set('customer', params.customer);
   u.searchParams.set('otlp', params.otlp);
@@ -89,9 +101,24 @@ export interface MetricSummary {
   perBiz: { bizCode: string; effectiveDurationP95: number; successRate: number; count: number }[];
 }
 
+/**
+ * 404 细分（评审 corr Nit-2）：信封 code=40401 才是「无数据/尚未到达」（轮询继续）；
+ * 其余 404（查询路径/契约回归）直接抛错——否则 pollUntil 会烧满超时后以
+ * 「probe 从未返回真值」失败，误导排障方向。fetch 带 10s 超时（评审 arch m-4），
+ * 防止查询服务挂起时 probe 阻塞、deadline 失效。
+ */
 async function apiGet<T>(path: string): Promise<ApiEnvelope<T> | null> {
-  const res = await fetch(`${backendUrl()}${path}`);
-  if (res.status === 404) return null; // 40401 无数据：轮询期视为尚未到达
+  const res = await fetch(`${backendUrl()}${path}`, { signal: AbortSignal.timeout(10_000) });
+  if (res.status === 404) {
+    let code: unknown;
+    try {
+      code = ((await res.clone().json()) as ApiEnvelope<T>).code;
+    } catch {
+      throw new Error(`查询 API ${path} HTTP 404 且响应体非信封（契约回归？）`);
+    }
+    if (code === 40401) return null; // 无数据：轮询期视为尚未到达
+    throw new Error(`查询 API ${path} HTTP 404 且信封 code=${String(code)}（非 40401，契约回归？）`);
+  }
   if (!res.ok) throw new Error(`查询 API ${path} HTTP ${res.status}`);
   return (await res.json()) as ApiEnvelope<T>;
 }
@@ -126,12 +153,15 @@ export interface PollOptions {
 /**
  * 轮询直到 probe 返回真值（全链路 receiver→Kafka→storage→Databend 有管道时延）。
  * probe 抛错不终止轮询（内网抖动容忍），超时后带最后一次错误抛出。
+ * 缺省 60s（评审 arch m-3）：full-chain 最多串行 3 次轮询 + 页内操作 ≈10s，
+ * 复合预算须 < playwright.config.ts 的 test timeout（240s），保证本函数的
+ * 「轮询超时（label）：最后一次错误」诊断先于 Playwright 通用超时触发。
  */
 export async function pollUntil<T>(
   probe: () => Promise<T | null | undefined>,
   opts: PollOptions,
 ): Promise<T> {
-  const timeoutMs = opts.timeoutMs ?? 120_000;
+  const timeoutMs = opts.timeoutMs ?? 60_000;
   const intervalMs = opts.intervalMs ?? 3_000;
   const deadline = Date.now() + timeoutMs;
   let last = 'probe 从未返回真值';

@@ -5,8 +5,11 @@
  * - E2E_BACKEND_URL（env-gate，必填才跑）：查询服务基址，如 http://10.1.8.33:8081；
  *   未设置 → 全部 spec skip（内网 Kafka/Databend 可达性未知，待澄清 #7）
  * - E2E_OTLP_URL（可选）：OTLP/HTTP traces 端点；缺省按接收端 observe.otlp.port
- *   默认 4318 从 E2E_BACKEND_URL 同主机派生（详设 §5 receiver 配置）
- * - E2E_HOST_URL（可选）：vue3 测试宿主页地址，缺省 http://127.0.0.1:4173
+ *   默认 4318 从 E2E_BACKEND_URL 同主机派生（详设 §5 receiver 配置），
+ *   E2E_OTLP_PORT 可单独覆盖派生端口
+ * - E2E_HOST_PORT（可选）：vue3 测试宿主页端口，缺省 4173（宿主页地址固定为
+ *   http://127.0.0.1:<该端口>；host/vite.config.ts 读同一变量，三处口径一致。
+ *   多 worktree 并行跑 E2E 时每个 worktree 须设不同端口——评审 arch M-1）
  *
  * 宿主页（tests/e2e/host，vite dev + mock 后端中间件）仅在 env-gate 打开时由
  * webServer 拉起——未设置 E2E_BACKEND_URL 时全部 skip，不起任何进程。
@@ -20,7 +23,10 @@ const hostUrl = `http://127.0.0.1:${hostPort}`;
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: ['*.spec.ts'],
-  timeout: 180_000, // 全链路含存储管道时延，给足余量（轮询上限另在 spec 内控制）
+  // 复合预算（评审 arch m-3）：full-chain 最多串行 3 次 pollUntil（缺省 60s/次）
+  // + 页内操作 ≈10s，须 < 本超时，保证 pollUntil 的「轮询超时（label）：最后一次
+  // 错误」诊断先于 Playwright 通用超时触发
+  timeout: 240_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1, // 两 spec 共享宿主端口与（内网）后端写入，串行避免互相干扰

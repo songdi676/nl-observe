@@ -9,6 +9,7 @@ import { test, expect } from '@playwright/test';
 import {
   dayOffset,
   e2eEnabled,
+  flushPage,
   getMetricsSummary,
   hostUrl,
   newCustomerId,
@@ -17,19 +18,17 @@ import {
 } from './support/e2e-env';
 
 test.describe('metrics：first_screen_load data point 存在性', () => {
-  test('宿主页加载后查询 API 可见首屏指标（存在性，不断言精确值）', async ({ page }) => {
-    test.skip(!e2eEnabled(), 'E2E_BACKEND_URL 未设置：全链路 E2E skip（env-gated）');
+  // describe 级 gate（评审 arch m-7②）：新增用例自动受 env-gate 保护，不会漏加
+  test.skip(!e2eEnabled(), 'E2E_BACKEND_URL 未设置：全链路 E2E skip（env-gated）');
 
+  test('宿主页加载后查询 API 可见首屏指标（存在性，不断言精确值）', async ({ page }) => {
     const customer = newCustomerId();
     await page.goto(hostUrl({ customer, otlp: otlpTracesUrl() }));
     await expect(page.getByTestId('host-status')).toContainText('INITIALIZED');
 
     // 首屏指标在 load 时记录；等一个周期 reader 窗口后 shutdown 冲刷（DELTA 导出）
     await page.waitForTimeout(3000);
-    await page.evaluate(() => {
-      const w = window as unknown as { __e2eFlush?: () => Promise<void> };
-      return w.__e2eFlush?.();
-    });
+    await flushPage(page);
 
     const summary = await pollUntil(
       async () => {

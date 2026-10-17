@@ -3,7 +3,11 @@
  * - SDK 走 alias 直接引 sdk-web/src 源码（宿主即被测链路一部分，无需先 build dist）
  * - mock 后端：/mock-api/* 中间件挂在同一 vite 进程——宿主页的 fetch 是真实
  *   网络请求（跨进程 HTTP），SDK fetch 包装据此产生 REST span
- * - 固定 127.0.0.1:4173 strictPort（Playwright webServer/baseURL 口径一致）
+ * - 默认 127.0.0.1:4173，E2E_HOST_PORT 可覆盖（须与 playwright.config.ts /
+ *   e2e-env.ts 的读取口径一致，否则 webServer 等待端口与 vite 实际端口错位）；
+ *   strictPort 下端口被占即启动失败。多 worktree 并行跑 E2E 时务必给每个
+ *   worktree 设不同 E2E_HOST_PORT，避免静默测到别的 worktree 的宿主页
+ *   （评审 arch M-1 串扰）
  */
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin, type ViteDevServer } from 'vite';
@@ -35,5 +39,5 @@ export default defineConfig({
       '@nl-observe/sdk-web': fileURLToPath(new URL('../../../sdk-web/src/index.ts', import.meta.url)),
     },
   },
-  server: { host: '127.0.0.1', port: 4173, strictPort: true },
+  server: { host: '127.0.0.1', port: Number(process.env.E2E_HOST_PORT ?? 4173), strictPort: true },
 });

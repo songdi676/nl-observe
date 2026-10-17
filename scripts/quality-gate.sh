@@ -212,6 +212,11 @@ run_frontend() {
     else
       "$VTS" --noEmit >/dev/null 2>&1 || { tsc_status=fail; tsc_detail="类型检查未通过"; tsc_sug='["运行 vue-tsc --noEmit 查看明细并修复"]'; }
     fi
+    # T23 评审 corr Minor-3：E2E 测试宿主（tests/e2e/host）自带 tsconfig，不在根
+    # tsconfig include 内——存在 test:e2e:typecheck 脚本时并入 vue-tsc 门一并执行
+    if [ "$tsc_status" = pass ] && grep -q '"test:e2e:typecheck"' package.json 2>/dev/null; then
+      "$NPM" run test:e2e:typecheck >/dev/null 2>&1 || { tsc_status=fail; tsc_detail="类型检查未通过（根或 e2e 宿主）"; tsc_sug='["运行 npx vue-tsc --noEmit 与 npm run test:e2e:typecheck 查看明细"]'; }
+    fi
   fi
   if ! "$NPM" audit --audit-level=high >/dev/null 2>&1; then
     audit_status=fail; audit_detail="存在高危依赖漏洞"; audit_sug='["运行 npm audit 查看明细并升级依赖"]'

@@ -12,6 +12,7 @@ import { test, expect } from '@playwright/test';
 import {
   dayOffset,
   e2eEnabled,
+  flushPage,
   getTrace,
   hostUrl,
   listBusinesses,
@@ -21,9 +22,10 @@ import {
 } from './support/e2e-env';
 
 test.describe('full-chain：宿主页办理 → OTLP → 后端 → 查询 API', () => {
-  test('签入→A(fetch)→B(A 挂起)→恢复并结束 A→结束 B→查询断言', async ({ page }) => {
-    test.skip(!e2eEnabled(), 'E2E_BACKEND_URL 未设置：全链路 E2E skip（env-gated）');
+  // describe 级 gate（评审 arch m-7②）：新增用例自动受 env-gate 保护，不会漏加
+  test.skip(!e2eEnabled(), 'E2E_BACKEND_URL 未设置：全链路 E2E skip（env-gated）');
 
+  test('签入→A(fetch)→B(A 挂起)→恢复并结束 A→结束 B→查询断言', async ({ page }) => {
     const customer = newCustomerId();
     await page.goto(hostUrl({ customer, otlp: otlpTracesUrl() }));
     await expect(page.getByTestId('host-status')).toContainText('INITIALIZED');
@@ -48,10 +50,7 @@ test.describe('full-chain：宿主页办理 → OTLP → 后端 → 查询 API',
     await page.getByTestId('btn-end-b').click();
 
     // flush：shutdown 冲刷 BSP + metric reader（sendBeacon OTLP/HTTP 尽力上报）
-    await page.evaluate(() => {
-      const w = window as unknown as { __e2eFlush?: () => Promise<void> };
-      return w.__e2eFlush?.();
-    });
+    await flushPage(page);
 
     // —— 查询 API 断言（存储管道有秒级时延，轮询至数据到达）——
     const items = await pollUntil(
@@ -78,8 +77,10 @@ test.describe('full-chain：宿主页办理 → OTLP → 后端 → 查询 API',
     expect(b!.status).toBe('success');
     expect(b!.endReason).toBe('explicit');
 
-    // effectiveDurationMs 宽松区间：页内时序 A 墙钟≈5.1s-挂起≈1.5s≈3.6s，B≈2.7s；
-    // 容忍浏览器事件循环/网络抖动，只断言数量级（详设 §6.4「宽松」口径）
+    // effectiveDurationMs 宽松区间（评审 m-2 修正时序口径，与页内固定等待一致）：
+    // A 墙钟≈3.9s（1200+1500+1200）- 挂起≈1.5s ≈ 2.4s；B 墙钟≈2.7s，恢复 A 时
+    // B 按 T13 不变量被自动挂起≈1.2s → B effective≈1.5s。容忍浏览器事件循环/网络
+    // 抖动，只断言数量级（详设 §6.4「宽松」口径）——照此数值收紧区间前须同步页内时序
     expect(a!.effectiveDurationMs).toBeGreaterThanOrEqual(1500);
     expect(a!.effectiveDurationMs).toBeLessThanOrEqual(6000);
     expect(b!.effectiveDurationMs).toBeGreaterThanOrEqual(1000);
