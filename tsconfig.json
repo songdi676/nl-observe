@@ -32,6 +32,10 @@
     "sdk-web/test/rest.spec.ts",
     "sdk-web/test/export.spec.ts",
     "sdk-web/test/vue2-host",
-    "sdk-web/test/vue3-host"
+    "sdk-web/test/vue3-host",
+    "tests/e2e"
+  ],
+  "exclude": [
+    "tests/e2e/host"
   ]
 }

@@ -5,3 +5,5 @@ target/
 *.log
 .build.log
 .claude/worktrees/
+test-results/
+playwright-report/

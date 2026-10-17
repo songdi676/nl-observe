@@ -1,0 +1,17 @@
+{
+  "name": "nl-observe-e2e-host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "T23 E2E vue3 测试宿主（vite dev + mock 后端中间件，详设 §6.4）：SDK 经 alias 引 sdk-web/src 源码，页面按钮驱动办理流程，Playwright 操作。",
+  "scripts": {
+    "dev": "vite"
+  },
+  "dependencies": {
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.0",
+    "vite": "^6.0.7"
+  }
+}

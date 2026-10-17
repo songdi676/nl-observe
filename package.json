@@ -8,12 +8,15 @@
     "poc/sdk-vue2-init",
     "poc/sdk-vue3-init",
     "poc/micro-app-capture",
-    "sdk-web"
+    "sdk-web",
+    "tests/e2e/host"
   ],
   "scripts": {
     "lint": "eslint .",
     "test": "vitest run",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:local": "node tests/e2e/support/run-local.mjs"
   },
   "overrides": {
     "vue-template-compiler": "^2.7.16"
@@ -26,6 +29,8 @@
     "typescript": "5.9.3",
     "typescript-eslint": "^8.0.0",
     "vitest": "5.0.4",
-    "vue-tsc": "^2.2.0"
+    "vue-tsc": "^2.2.0",
+    "@playwright/test": "1.64.1",
+    "globals": "^14.0.0"
   }
 }
