@@ -15,42 +15,47 @@ const summary = ref<MetricSummary | null>(null)
 /** 后端 40401 = 所选范围完全无数据（详设 §2.4/§4.1）→ 展示空数据占位态，而非错误态 */
 const empty = ref(false)
 const loading = ref(false)
-const error = ref('')
-const searched = ref(false)
+/** 错误态错误码（评审 sec-L-1：页面只展示错误码供排查，不逐字展示后端 message——
+ *  50000 类故障的 message 可能含内部细节；原始错误写 console 供排障） */
+const errorCode = ref<number | null>(null)
 /** 查询参数快照：重试按快照重发，不受输入框后续改动影响（与 BusinessesPage lastCustomer 同口径） */
 const lastQuery = ref<MetricsSummaryQuery | null>(null)
 
-/** from/to/customerId 必填（恒带 customerId，规避运维视图限流桶）；
- *  loading 期间禁用防重复提交 */
+/** from/to/customerId 必填（恒带 customerId，规避运维视图限流桶；必填性已由
+ *  MetricsSummaryQuery 类型钉进编译器，评审 arch M-1） */
 const canQuery = computed(
   () => customerId.value !== '' && from.value !== '' && to.value !== ''
 )
 
-// 陈旧响应防护：快速重复查询时，旧响应不得覆盖新查询的状态
+// 陈旧响应防护（评审 arch M-3）：当前 UI 无路径触发并发请求（提交按钮 loading
+// 期间禁用、retry 同样受 loading gating），loadSeq 是针对未来交互变更（如自动
+// 刷新/解除并发锁）的防御代码——届时生效，保证旧响应不覆盖新查询状态
 let loadSeq = 0
 async function doQuery(q: MetricsSummaryQuery): Promise<void> {
   const seq = ++loadSeq
   loading.value = true
-  error.value = ''
+  errorCode.value = null
   empty.value = false
   summary.value = null
   lastQuery.value = q
   try {
     const got = await api.value.getMetricsSummary(q)
     if (seq !== loadSeq) return
+    if (got == null) {
+      // 后端契约违约兜底（评审 N-1）：code 0 + data:null → 错误态，不静默空白
+      throw new ApiError(-1, 'metrics/summary returned empty data (contract violation)')
+    }
     summary.value = got
   } catch (e) {
     if (seq !== loadSeq) return
     if (e instanceof ApiError && e.code === 40401) {
       empty.value = true
     } else {
-      error.value = e instanceof Error ? e.message : String(e)
+      console.error('[web-ui] metrics/summary query failed:', e)
+      errorCode.value = e instanceof ApiError ? e.code : -1
     }
   } finally {
-    if (seq === loadSeq) {
-      loading.value = false
-      searched.value = true
-    }
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -119,6 +124,7 @@ function formatRate(v: number): string {
           type="text"
         >
       </label>
+      <!-- loading 期间禁用防重复提交（该行为属按钮而非 canQuery，评审 N-3） -->
       <button
         type="submit"
         class="query-btn"
@@ -134,12 +140,12 @@ function formatRate(v: number): string {
     >
       指标加载中…
     </p>
-    <template v-else-if="error">
+    <template v-else-if="errorCode !== null">
       <p
         class="error"
         role="alert"
       >
-        指标加载失败：{{ error }}
+        指标加载失败（错误码 {{ errorCode }}）
       </p>
       <button
         type="button"
@@ -223,8 +229,9 @@ function formatRate(v: number): string {
         暂无业务指标数据
       </p>
     </template>
+    <!-- empty 只在 doQuery 完成后（同 seq finally）才可能为 true，已隐含“已查询”语义（评审 arch M-4） -->
     <p
-      v-else-if="searched && empty"
+      v-else-if="empty"
       class="empty"
     >
       所选时间范围内无指标数据

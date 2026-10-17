@@ -2,7 +2,7 @@
  * E2E（jsdom 全应用级）：MetricsPage 加载 → 指标卡片存在性（不断言精确值）。
  * 与 tracePage.spec.ts 同口径：走真实路由 + 真实默认 observeApi 单例
  * （baseURL 取 VITE_API_BASE_URL 缺省 /api/observe），网络层由 msw 以 jsdom origin 拦截；
- * 真实后端全链路 E2E 见 tests/e2e（Playwright，T23，env-gated）。
+ * 真实后端全链路 E2E 见仓库根 tests/e2e（Playwright，T23，env-gated——非本目录，评审 N-2）。
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'

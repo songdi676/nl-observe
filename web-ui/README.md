@@ -24,6 +24,13 @@ npx vitest run --coverage   # 覆盖率（质量门产物 coverage/coverage-summ
 ## 已交付页面
 
 - T19：BusinessesPage 业务列表 + TracePage span 树时间线（挂起/恢复事件标记、span 详情抽屉）
-- T20：MetricsPage 指标卡片——调用 GET /api/observe/metrics/summary（恒带 customerId，规避运维视图限流桶），
-  展示 firstScreenLoadP95 与 perBiz{effectiveDurationP95, successRate, count}；
-  完全无数据（后端 40401）与字段级空值均展示占位态，其余错误态提供重试按钮（按上次查询参数快照重发）
+- T20：MetricsPage 指标卡片——调用 GET /api/observe/metrics/summary（customerId 必填，类型钉死，
+  规避运维视图限流桶；恒带 customerId），展示 firstScreenLoadP95 与 perBiz{effectiveDurationP95,
+  successRate, count}；完全无数据（后端 40401）与字段级空值均展示占位态，其余错误态展示错误码
+  （不逐字展示后端 message，评审 sec-L-1）+ 重试按钮（按上次查询参数快照重发）
+
+## 后续任务
+
+- 筛选表单（日期范围 + 查询按钮）与 .filters/.query-btn/.error/.empty/.loading 样式在
+  BusinessesPage 与 MetricsPage 间复制（约 70 行）——出现第三个查询页时应抽共享
+  `DateRangeFilter` 组件/共享样式块（T20 评审 arch M-2，暂记跟进项）

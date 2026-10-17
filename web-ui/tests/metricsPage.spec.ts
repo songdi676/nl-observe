@@ -154,7 +154,10 @@ describe('MetricsPage：调用 /metrics/summary（恒带 customerId）展示指�
     const wrapper = mountPage()
     await fillAndSubmit(wrapper)
 
-    expect(wrapper.find('.error').text()).toContain('服务端内部错误')
+    // 评审 sec-L-1：页面只展示错误码，不逐字展示后端 message（防内部细节外泄）
+    const errText = wrapper.find('.error').text()
+    expect(errText).toContain('50000')
+    expect(errText).not.toContain('服务端内部错误')
     const retry = wrapper.get('button.retry-btn')
     await retry.trigger('click')
     await flushPromises()
@@ -163,6 +166,51 @@ describe('MetricsPage：调用 /metrics/summary（恒带 customerId）展示指�
     expect(wrapper.find('.metric-card[data-metric="firstScreenLoadP95"]').exists()).toBe(true)
     expect(wrapper.find('.metric-card[data-biz-code="ORDER"]').exists()).toBe(true)
     expect(calls).toBe(2)
+  })
+
+  it('重试按查询参数快照重发：失败后改动输入框不影响重试参数', async () => {
+    const urls: string[] = []
+    let calls = 0
+    server.use(
+      http.get(`${BASE}/metrics/summary`, ({ request }) => {
+        urls.push(request.url)
+        calls += 1
+        if (calls === 1) {
+          return HttpResponse.json({ code: 50000, message: 'boom', data: null }, { status: 500 })
+        }
+        return HttpResponse.json({ code: 0, message: 'ok', data: summaryFixture })
+      })
+    )
+    const wrapper = mountPage()
+    await fillAndSubmit(wrapper)
+    expect(wrapper.find('.error').exists()).toBe(true)
+
+    // 失败后改动输入框：重试应重发首次查询的快照，而非当前输入值（评审 correctness Minor）
+    await wrapper.find('input[name="customerId"]').setValue('c-999')
+    await wrapper.find('input[name="from"]').setValue('2026-09-05')
+    await wrapper.get('button.retry-btn').trigger('click')
+    await flushPromises()
+
+    expect(urls).toHaveLength(2)
+    const retryUrl = new URL(urls[1])
+    expect(retryUrl.searchParams.get('customerId')).toBe('c-001')
+    expect(retryUrl.searchParams.get('from')).toBe('2026-09-01')
+    expect(retryUrl.searchParams.get('to')).toBe('2026-09-28')
+  })
+
+  it('后端契约违约（code 0 + data:null）→ 错误态（错误码 -1），不静默空白', async () => {
+    server.use(
+      http.get(`${BASE}/metrics/summary`, () =>
+        HttpResponse.json({ code: 0, message: 'ok', data: null })
+      )
+    )
+    const wrapper = mountPage()
+    await fillAndSubmit(wrapper)
+
+    // 评审 N-1：违约兜底转错误态（而非表单下静默空白）
+    const errText = wrapper.find('.error').text()
+    expect(errText).toContain('-1')
+    expect(wrapper.findAll('.metric-card')).toHaveLength(0)
   })
 
   it('必填项缺失时查询按钮禁用（恒带 customerId：空 customerId 不发请求）', async () => {

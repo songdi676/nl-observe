@@ -126,7 +126,9 @@ describe('observeApi 统一解包 {code,message,data}', () => {
       })
     )
     const api = createObserveApi({ baseURL: BASE })
-    await api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28' })
+    // customerId 类型必填（评审 arch M-1）；API 层以空串模拟跨客户运维视图口径——
+    // cleanParams 剔除空串，查询串不含 customerId（页面层由 canQuery 保证恒非空）
+    await api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28', customerId: '' })
     const url = new URL(capturedUrl)
     expect(url.searchParams.has('bizCode')).toBe(false)
     expect(url.searchParams.has('customerId')).toBe(false)
@@ -178,7 +180,7 @@ describe('observeApi 非 0 code 抛业务错误（详细设计 §4.1：业务错
     )
     const api = createObserveApi({ baseURL: BASE })
     await expect(
-      api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28' })
+      api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28', customerId: '' })
     ).rejects.toMatchObject({ code: 42901 })
   })
 
@@ -193,7 +195,7 @@ describe('observeApi 非 0 code 抛业务错误（详细设计 §4.1：业务错
     )
     const api = createObserveApi({ baseURL: BASE })
     await expect(
-      api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28' })
+      api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28', customerId: '' })
     ).rejects.toMatchObject({ code: 50000 })
   })
 
@@ -252,7 +254,7 @@ describe('observeApi 401 跳转登录', () => {
     const onUnauthorized = vi.fn()
     const api = createObserveApi({ baseURL: BASE, onUnauthorized })
     await expect(
-      api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28' })
+      api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28', customerId: '' })
     ).rejects.toThrow()
     expect(onUnauthorized).not.toHaveBeenCalled()
   })
@@ -289,7 +291,7 @@ describe('observeApi 401 跳转登录', () => {
     const api = createObserveApi({ baseURL: BASE, loginUrl: '/login', onUnauthorized })
     await Promise.allSettled([
       api.listBusinesses('c-001', { from: '2026-09-01', to: '2026-09-28' }),
-      api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28' })
+      api.getMetricsSummary({ from: '2026-09-01', to: '2026-09-28', customerId: '' })
     ])
     expect(onUnauthorized).toHaveBeenCalledTimes(1)
   })
