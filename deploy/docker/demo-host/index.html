@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>nl-observe 全链路演示</title>
+  </head>
+  <body>
+    <main>
+      <h1>nl-observe 全链路演示</h1>
+      <p>
+        按钮驱动完整办理流程，SDK 以同源 <code>/v1/traces</code> 上报（nginx 代理至 receiver:4318），
+        数据经 kafka→storage 落入 Databend，可在 web-ui 查询。
+      </p>
+      <label>
+        客户号
+        <input id="customer" type="text" size="24" />
+      </label>
+      <pre id="status" data-testid="host-status"></pre>
+      <button type="button" data-action="signin">签入客户</button>
+      <button type="button" data-action="start-a">业务 A（ORDER）</button>
+      <button type="button" data-action="fetch">发起请求（mock 后端）</button>
+      <button type="button" data-action="start-b">切业务 B（PAY，自动挂起 A）</button>
+      <button type="button" data-action="resume-a">恢复 A</button>
+      <button type="button" data-action="end-a">结束 A</button>
+      <button type="button" data-action="end-b">结束 B</button>
+      <button type="button" data-action="flush">冲刷（shutdown 强制上报）</button>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

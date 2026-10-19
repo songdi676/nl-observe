@@ -1,0 +1,134 @@
+# nl-observe 演示栈（本机 Docker，全链路）：
+#   浏览器 → demo-host(8083, nginx 同源代理 /v1→receiver:4318 绕 CORS 缺口)
+#          → receiver(4318 OTLP + 8080 /config/producer) → kafka(KRaft, 无宿主端口)
+#          → storage → databend(8010→8000) ← query(8081, /api/observe)
+#          → web-ui(8082, nginx 代理 /api/observe→query)
+# 所有对外端口绑 0.0.0.0（局域网可访问，演示要求）。
+# 前置：bash build.sh（产出三个 fat-jar、web-ui/dist、demo-host/dist）；
+#       docker compose up -d kafka databend receiver web-ui demo-host
+#       → docker compose up -d storage query（init 一次性服务被 depends_on 自动带起：
+#         建 observe 库 + 三表，成功后 storage/query 才启动）
+services:
+  kafka:
+    image: apache/kafka:latest
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # 演示口径：三 topic（nl-observe.otlp.{traces,metrics,logs}）由首条 produce 自动建（默认分区 1）
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: "5L6g3nShT-eMCtK--X86sw"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  databend:
+    image: datafuselabs/databend:latest
+    ports:
+      - "0.0.0.0:8010:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  receiver:
+    image: docker.m.daocloud.io/library/eclipse-temurin:17-jre
+    command: ["java", "-jar", "/app/app.jar"]
+    volumes:
+      - ../../backend-observe-receiver/target/backend-observe-receiver-0.1.0-SNAPSHOT.jar:/app/app.jar:ro
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # 演示口径：入口 CIDR 放开为全网（仅演示！生产按详设 §5 收紧内网段）
+      OBSERVE_ALLOWED_CIDRS: 0.0.0.0/0
+    ports:
+      - "0.0.0.0:4318:4318"
+      - "0.0.0.0:8080:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # DDL 初始化（建 observe 库 + otel_spans/otel_metrics/otel_logs）——一次性；
+  # 001-init.sql 无 CREATE DATABASE，工具先建库再逐条执行（JDBC URL 指向 /observe）
+  init:
+    image: docker.m.daocloud.io/library/eclipse-temurin:17-jre
+    command: ["java", "-cp", "/app", "DatabendDdlInit"]
+    volumes:
+      - ./tools/classes:/app:ro
+      - ../../scripts/databend/001-init.sql:/sql/001-init.sql:ro
+    environment:
+      DATABEND_HTTP: http://databend:8000
+      DATABEND_USER: root
+      DATABEND_PASSWORD: ""
+      DDL_FILE: /sql/001-init.sql
+    depends_on:
+      databend:
+        condition: service_healthy
+
+  storage:
+    image: docker.m.daocloud.io/library/eclipse-temurin:17-jre
+    command: ["java", "-jar", "/app/app.jar"]
+    volumes:
+      - ../../backend-observe-storage/target/backend-observe-storage-0.1.0-SNAPSHOT.jar:/app/app.jar:ro
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # storage 启动自检强制 url 含 presigned_url_disabled=true（T08 口径）
+      DATABEND_URL: jdbc:databend://databend:8000/observe?presigned_url_disabled=true
+      DATABEND_USER: root
+      DATABEND_PASSWORD: ""
+    depends_on:
+      kafka:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  query:
+    image: docker.m.daocloud.io/library/eclipse-temurin:17-jre
+    command: ["java", "-jar", "/app/app.jar"]
+    volumes:
+      - ../../backend-observe-query/target/backend-observe-query-0.1.0-SNAPSHOT.jar:/app/app.jar:ro
+    environment:
+      DATABEND_URL_RO: jdbc:databend://databend:8000/observe?presigned_url_disabled=true
+      DATABEND_USER_RO: root
+      DATABEND_PASSWORD_RO: ""
+      OBSERVE_AUDIT_FILE: /tmp/audit.log
+    ports:
+      - "0.0.0.0:8081:8081"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web-ui:
+    image: docker.m.daocloud.io/library/nginx:alpine
+    volumes:
+      - ../../web-ui/dist:/usr/share/nginx/html:ro
+      - ./nginx/webui.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "0.0.0.0:8082:80"
+    depends_on:
+      - query
+    restart: unless-stopped
+
+  demo-host:
+    image: docker.m.daocloud.io/library/nginx:alpine
+    volumes:
+      - ./demo-host/dist:/usr/share/nginx/html:ro
+      - ./nginx/demo.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "0.0.0.0:8083:80"
+    depends_on:
+      - receiver
+    restart: unless-stopped

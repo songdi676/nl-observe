@@ -1,0 +1,15 @@
+{
+  "name": "nl-observe-demo-host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "nl-observe 演示宿主页（deploy/docker/demo-host）：按钮驱动完整办理流程，SDK 经 vite alias 引 sdk-web/src 源码，OTLP 走同源 /v1 代理至 receiver。",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}
